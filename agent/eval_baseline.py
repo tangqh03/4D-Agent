@@ -70,7 +70,7 @@ def load_samples(split="dev", tasks=None, limit=None):
     return samples
 
 
-def solve_baseline(sample, max_tokens=100):
+def solve_baseline(sample, max_tokens=100, timeout=180):
     video_path = os.path.join(BENCH_DIR, sample["video"])
     question = sample["direct_prompting"]
     options = sample["options"]
@@ -86,8 +86,11 @@ def solve_baseline(sample, max_tokens=100):
 
     try:
         resp = llm.chat([{"role": "user", "content": content}],
-                        max_tokens=max_tokens, temperature=0.0, retries=3)
-        answer = resp["content"].strip().strip("。.")
+                        max_tokens=max_tokens, temperature=0.0, timeout=timeout,
+                        retries=3)
+        final_answer = (resp.get("content") or "").strip()
+        answer = final_answer.strip("。.")
+        reasoning = resp.get("reasoning") or ""
         pred = None
         for o in options:
             if o.lower() in answer.lower():
@@ -104,7 +107,10 @@ def solve_baseline(sample, max_tokens=100):
             "question": question, "options": options,
             "video": sample.get("video", ""),
             "dimension": sample.get("dimension", ""),
+            "reasoning": reasoning,
+            "final_answer": final_answer,
             "raw_answer": answer,
+            "usage": resp.get("usage", {}),
             "elapsed_s": elapsed,
             "model": llm.MODEL,
         }
@@ -114,6 +120,7 @@ def solve_baseline(sample, max_tokens=100):
             "gt": sample["answer"], "pred": None,
             "correct": False, "src": "error",
             "question": question, "options": options,
+            "reasoning": "", "final_answer": "",
             "error": f"{type(e).__name__}: {str(e)[:300]}",
             "model": llm.MODEL,
         }

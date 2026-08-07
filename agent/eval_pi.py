@@ -58,6 +58,48 @@ def _extract_frames(video_path, out_dir, n=8):
     return paths
 
 
+def _parse_pi_json(stdout):
+    """Extract thinking and final text from pi's JSON event stream."""
+    thinking_deltas = []
+    text_deltas = []
+    final_thinking = None
+    final_text = None
+    usage = {}
+
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        event_type = event.get("type")
+        if event_type == "message_update":
+            delta = event.get("assistantMessageEvent", {})
+            delta_type = delta.get("type")
+            if delta_type == "thinking_delta":
+                thinking_deltas.append(delta.get("delta", ""))
+            elif delta_type == "text_delta":
+                text_deltas.append(delta.get("delta", ""))
+        elif event_type == "message_end":
+            message = event.get("message", {})
+            blocks = message.get("content", []) if isinstance(message, dict) else []
+            thinking = []
+            text = []
+            for block in blocks:
+                if block.get("type") == "thinking":
+                    thinking.append(block.get("thinking", ""))
+                elif block.get("type") == "text":
+                    text.append(block.get("text", ""))
+            if thinking or text:
+                final_thinking = "".join(thinking)
+                final_text = "".join(text)
+            usage = event.get("usage", usage)
+
+    reasoning = final_thinking if final_thinking is not None else "".join(thinking_deltas)
+    answer = final_text if final_text is not None else "".join(text_deltas)
+    return reasoning.strip(), answer.strip(), usage
+
+
 def solve_pi(sample, timeout=300):
     video_path = os.path.join(BENCH_DIR, sample["video"])
     question = sample["direct_prompting"]
@@ -67,16 +109,18 @@ def solve_pi(sample, timeout=300):
     with tempfile.TemporaryDirectory(prefix="pi_eval_") as tmp:
         frames = _extract_frames(video_path, tmp, n=8)
         prompt = PROMPT.format(question=question, options=" / ".join(options))
-        cmd = [PI_BIN, "-p", "--provider", PROVIDER, "--model", MODEL]
+        cmd = [PI_BIN, "-p", "--mode", "json", "--no-tools",
+               "--provider", PROVIDER, "--model", MODEL]
         cmd += [f"@{p}" for p in frames]
         cmd.append(prompt)
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True,
                                   timeout=timeout, cwd=tmp)
-            answer = proc.stdout.strip().strip("。.")
             if proc.returncode != 0:
                 raise RuntimeError(
                     f"pi exit {proc.returncode}: {proc.stderr.strip()[:300]}")
+            reasoning, final_answer, usage = _parse_pi_json(proc.stdout)
+            answer = final_answer.strip("。.")
             pred = None
             for o in options:
                 if o.lower() in answer.lower():
@@ -92,7 +136,10 @@ def solve_pi(sample, timeout=300):
                 "question": question, "options": options,
                 "video": sample.get("video", ""),
                 "dimension": sample.get("dimension", ""),
+                "reasoning": reasoning,
+                "final_answer": final_answer,
                 "raw_answer": answer[:500],
+                "usage": usage,
                 "elapsed_s": time.time() - t0,
                 "model": MODEL,
             }
@@ -102,6 +149,7 @@ def solve_pi(sample, timeout=300):
                 "gt": sample["answer"], "pred": None,
                 "correct": False, "src": "error",
                 "question": question, "options": options,
+                "reasoning": "", "final_answer": "",
                 "error": f"{type(e).__name__}: {str(e)[:300]}",
                 "model": MODEL,
             }
