@@ -31,3 +31,4 @@ ai-native-workspace/
 # OS
 .DS_Store
 Thumbs.db
+web/case_viewer/data/

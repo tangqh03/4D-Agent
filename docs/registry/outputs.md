@@ -69,3 +69,15 @@ Index of all output directories and artifacts produced by this project.
 **Produced by**: `agent/eval_pi.py`
 **Format**: JSONL，每行 `{id, task, gt, pred, correct, src, question, options, video, dimension, raw_answer, elapsed_s, model}`
 **Notes**: qwen3-vl-plus via pi v0.84.0（print 模式,无工具）, 403 samples, **54.6%**; run log `docs/working_logs/runs/2026-08-06_pi_stage1_dev.md`; 冒烟记录另存 `pi_smoke_test.jsonl`
+
+### pi harness Stage 2 (agentic) dev results
+**Path**: `outputs/predictions/pi_agentic_qwen3-vl-plus_dev_20260806.jsonl`
+**Produced by**: `agent/eval_pi_agentic.py`
+**Format**: 同 Stage 1（raw_answer 为轨迹末尾 800 字符）
+**Notes**: pi 原生工具（bash/read）自主分析, 403 samples, **53.8%**; 与 S1 union oracle 71.7%; run log `runs/2026-08-06_pi_stage2_agentic_dev.md`; 完整轨迹在 `~/.pi/agent/sessions/--tmp-pi_ws_*`（1.9GB,含 agent 看过的帧）
+
+### pi Case Viewer 数据包
+**Path**: `web/case_viewer/data/`（gitignored,~80MB）
+**Produced by**: `scripts/build_case_viewer.py`
+**Format**: `cases.json`（S1/S2 join + 轨迹事件）+ `images/<id>/*.jpg`（agent 看过的帧,640px）
+**Notes**: 前端 `scripts/pi_case_viewer.py`（Flask :7875）读取;重跑评测后重新构建

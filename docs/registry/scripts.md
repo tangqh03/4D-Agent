@@ -61,6 +61,19 @@ Index of all scripts in this project. Each entry documents purpose, usage, input
 
 ## Root-level Python
 
+### scripts/build_case_viewer.py
+**Purpose**: 生成 pi case viewer 数据包(S1/S2 预测 join + pi session 轨迹/看过的帧提取)
+**Usage**: `/opt/conda/bin/python scripts/build_case_viewer.py`
+**Inputs**: `outputs/predictions/pi_*_dev_20260806.jsonl` ×2 + `~/.pi/agent/sessions/--tmp-pi_ws_*`
+**Outputs**: `web/case_viewer/data/`(cases.json + 缩略帧,~80MB,gitignored)
+**Notes**: 轨迹按题目文本+答案指纹匹配 session;重跑评测后需重新构建
+
+### scripts/pi_case_viewer.py
+**Purpose**: pi case 浏览前端(S1/S2 对比、视频回放、Stage2 工具轨迹+看过的帧);Flask 单页 + 相对路径 API,代理友好(参考 7874 的 v3_case_viewer 模式)
+**Usage**: `/home/admin/.conda/envs/star/bin/python -u scripts/pi_case_viewer.py --port 7875`;notebook 代理访问 `/proxy/7875/`
+**Inputs**: `web/case_viewer/data/`(先跑 build_case_viewer.py)+ benchmark 视频
+**Notes**: 无 websocket 依赖;`web/case_viewer/index.html` 为静态版备用
+
 ### visualize_results.py
 **Purpose**: ViSTR-Bench 可视化前端 — leaderboard 总览 dashboard（PNG）+ 样本级回放视频（MP4）
 **Usage**: `/opt/conda/bin/python visualize_results.py [--mode overview|samples] [--results outputs/predictions/xxx.jsonl]`

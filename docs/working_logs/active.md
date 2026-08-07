@@ -9,15 +9,23 @@ last_updated: 2026-08-06
 
 SpatialClaw 判定过于死板,换用 pi (https://github.com/earendil-works/pi) 作为新 baseline harness。
 
-**Stage 1 已完成 (2026-08-06)**: pi v0.84.0 局部安装于 `third_party/pi-runtime/`,
-`agent/eval_pi.py`(抽 8 帧 → `pi -p` 带图问答 → 打分),provider 配置在 `~/.pi/agent/models.json`(repo 外,含 key,chmod 600)。
-全量 dev **54.6% (220/403)**,0 errors,36 min (4 workers)。
-计划书: `plans/completed/0806-[pi作为harness]stage1-拉通.md`,run log: `runs/2026-08-06_pi_stage1_dev.md`。
+**Stage 1 已完成 (2026-08-06)**: `agent/eval_pi.py`(抽 8 帧 → `pi -p` 带图问答)。
+全量 dev **54.6% (220/403)**。计划书: `plans/completed/0806-[pi作为harness]stage1-拉通.md`。
 
-**关键观察**: pi 无工具(纯问答)已超裸 API baseline +4pp,仅差 V4 全工具版 1pp;
-"No" bias 明显缓解(Yes/No 题 pred Yes 46% vs gt 56%);Golf 44%→62%、Soccer 49%→55% 提升,但 Basketball 65%→43% 回退。
+**Stage 2 已完成 (2026-08-07)**: `agent/eval_pi_agentic.py` — pi 原生工具集,
+workspace + video.mp4,agent 自主 ffprobe/ffmpeg 抽帧 + read 看图(均 14.7 轮/题)。
+全量 dev **53.8% (217/403)**。关键修复: 网关流式 tool-call args 为累积式,
+补丁 `scripts/patch_pi_cumulative_args.py`(npm 重装后需重跑)。
+计划书: `plans/completed/0806-[pi作为harness]stage2-pi原生工具拉通.md`,
+run log: `runs/2026-08-06_pi_stage2_agentic_dev.md`。
 
-**Next (Stage 2)**: 启用 pi 工具能力(bash/read + 帧目录工作区),让模型自主探索帧/调用分析工具。
+**核心发现**: S1/S2 高度互补 — S2-only 对 69 题,S1-only 对 72 题,**union oracle 71.7%**。
+工具赢在关键瞬间类(Basketball +11pp),输在运动感知类(Relative_Velocity -28pp)。
+
+**Case Viewer**: `scripts/pi_case_viewer.py`(Flask, 7875 端口,代理友好)+
+`scripts/build_case_viewer.py`(数据包构建);S1/S2 对比 + Stage2 轨迹回放。
+
+**Next**: 混合路由(运动类走 S1,瞬间类走 S2)冲 60%+。
 
 ## Key Results Summary
 
