@@ -1,9 +1,54 @@
 ---
 status: active
-last_updated: 2026-08-06
+last_updated: 2026-08-08
 ---
 
 # ViSTR-Agent — Active Work State
+
+## Current Focus: Bug C 已根治 — vLLM serving 层修复生效（2026-08-08）
+
+**根因**（两方向互补调查）：8b-thinking 模型在多轮工具上下文的新回合**开头**直接输出
+裸 `{"name":...}</tool_call>` 而漏掉 `<tool_call>` 开标签（151657 出现 0 次，stochastic，
+触发率 37%，round2+ 为主）——是模型采样行为，reasoning parser 无解。
+
+**修复**：`/workspace/vllm-src/vllm/parser/abstract_parser.py` `parse_delta` 检测
+"配 tools 的请求 + 流开头 + `{"`" → 重建 `<tool_call>` 开标签进 content 流。
+单元测试 15/15，冒烟 **10/10 PASS、swallowed 恒为 0**（修复前 2/4 FAIL）。
+方案 B 不需要。eval 侧 `_repair_swallowed_tool_calls` 保留作兜底。
+详见 `runs/2026-08-08_pi_8b_vllm_tool_call_bare_json_fix.md` + handoff（status: resolved）。
+
+**vLLM 状态**：tmux `vllm` 中 clean 版运行中（2026-08-08 00:08 启动，pid 3410825，
+envs/311，port 8001，健康，**含修复**，日志 `/tmp/vllm_launch_20260808_clean.log`）。
+`~/.pi/agent/models.json` baseUrl **已恢复 8001**（8002 捕获代理已停，备份
+`/tmp/models.json.bak`）。
+
+**已完成**：全量 dev 403 重跑（任务 bijk3grx8，~4.2h）→ **51.4% (207/403)**，
+修复前 50.4% (203/403)，**+1.0pp**。吞工具样本（调用但未执行）**0**（修复前 ~14%），
+3590/3590 次工具调用全部真实执行，8 个 600s 超时（基线同类 6 个）。
+输出 `outputs/predictions/pi_agentic_qwen3-vl-8b-thinking_vllm_dev_fix.jsonl`
+（含 tool_trace/tool_results/tools_executed/tool_errors 轨迹字段）。
+run log: `runs/2026-08-08_pi_8b_vllm_full_dev_rerun_after_fix.md`。
+
+**工具轨迹落盘 + 执行校验（2026-08-08 完成）**：`eval_pi_agentic.py` 新增：
+- `tool_trace`：每次调用的 name + arguments（实际 bash command 全文）
+- `tool_results`：tool_execution_end 的 isError + content（read 图片以 data_bytes 计防爆量）
+- `tools_executed`：trace 中能匹配到执行结果的调用数（未匹配 = 被吞/未执行，Bug C 度量）
+- `tool_errors`：isError=true 的执行数
+校验工具 `/tmp/check_tool_execution.py`（按 toolCallId 配对）。验证：回放真实事件流
+11/11 执行 0 error；live 冒烟 4/4 执行 0 error。
+
+## Current Focus: pi Stage 2 × 本地 vLLM 8b-thinking
+
+**Stage 2 接入本地 qwen3-vl-8b-thinking（vLLM, TP=8, port 8001）**：`agent/eval_pi_agentic.py` + provider `vllm-local`。
+冒烟通过（agent 用 bash/write 自主分析视频）。全量 dev 403 已完成
+（**50.4%, 203/403**，输出 `outputs/predictions/pi_agentic_qwen3-vl-8b-thinking_vllm_dev.jsonl`）。
+注意跑本地 vLLM 需 `VISTR_PI_PROVIDER=vllm-local VISTR_PI_MODEL=qwen3-vl-8b-thinking`（默认 amap-gateway）。
+
+**关键改动**：
+- vLLM 需 `--enable-auto-tool-choice --tool-call-parser hermes`（Qwen3-VL 输出
+  `<tool_call>JSON</tool_call>` 格式，`hermes` parser 正则匹配；`qwen3_xml` 只认
+  `<function>/<parameter>` XML 不适用）——launcher/config 已支持
+- pi 累积式 args 补丁需重打：`/opt/conda/bin/python scripts/patch_pi_cumulative_args.py`
 
 ## Current Focus: pi 作为新 harness
 
@@ -36,6 +81,7 @@ run log: `runs/2026-08-06_pi_stage2_agentic_dev.md`。
 | qwen3-vl-plus + V4 tools | 55.6% | 403 |
 | qwen3-vl-8b-thinking baseline | 50.6% | 403 |
 | qwen3-vl-8b-thinking + V4 tools | 47.4% | 107 (partial) |
+| qwen3-vl-8b-thinking + pi agentic (修复后) | **51.4%** | 403 |
 | Best-of-both oracle (per-task) | 59.3% | 403 (estimated) |
 
 两模型互补：8b-thinking 擅长预测类 (Soccer +23pp, Golf +12pp)，plus 擅长空间感知 (Passage +19pp, Ego +18pp)。

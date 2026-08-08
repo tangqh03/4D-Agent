@@ -77,6 +77,11 @@ def build_command(config: dict[str, Any], python_executable: str) -> list[str]:
     if config.get("enable_prefix_caching", True):
         command.append("--enable-prefix-caching")
 
+    if config.get("enable_auto_tool_choice", False):
+        command.append("--enable-auto-tool-choice")
+        tool_parser = config.get("tool_call_parser", "hermes")
+        command.extend(["--tool-call-parser", str(tool_parser)])
+
     flag_map = {
         "mm_encoder_tp_mode": "--mm-encoder-tp-mode",
         "async_scheduling": "--async-scheduling",
