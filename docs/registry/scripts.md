@@ -1,7 +1,7 @@
 ---
 status: active
 scope: general
-last_verified: 2026-08-01
+last_verified: 2026-08-08
 owner: gaozhe
 ---
 
@@ -45,11 +45,29 @@ Index of all scripts in this project. Each entry documents purpose, usage, input
 **Outputs**: `outputs/predictions/pi_<model>_<timestamp>.jsonl`
 **Notes**: 环境变量 `VISTR_PI_PROVIDER` / `VISTR_PI_MODEL` 切换; pi session 会积累在 `~/.pi/agent/sessions/`,量大需清理
 
+### agent/eval_pi_agentic.py
+**Purpose**: pi harness 评测（Stage 2: agentic,带 extension 工具）
+**Usage**: `VISTR_PI_EXTENSION="agent/pi_ext/vistr_video_tools.ts,agent/pi_ext/evidence_closure.ts" python agent/eval_pi_agentic.py [--per-task 6] [--workers 4] [--resume]`
+**Inputs**: benchmark `data.json` + 视频; pi 安装于 `third_party/pi-runtime/`; extensions 通过 `VISTR_PI_EXTENSION` 指定
+**Outputs**: `outputs/predictions/pi_agentic_*.jsonl` 或 `--output` 指定
+**Notes**: 环境变量 `VISTR_PI_PROVIDER`/`VISTR_PI_MODEL` 切换; extension 路径自动转绝对路径; 含 closure 诊断字段
+
 ### agent/pi_ext/vistr_video_tools.ts
 **Purpose**: pi extension — 观察原语五件套(index_video / read_video_sequence / read_multiframe / read_crop / semantic_crop)
 **Usage**: `pi -p -e agent/pi_ext/vistr_video_tools.ts ...` 或评测脚本 `VISTR_PI_EXTENSION` 环境变量
 **Inputs**: workspace 内视频/图片;semantic_crop 依赖 perception 服务(:7876);caption/selection subcall 走 `~/.pi/agent/models.json` 网关
 **Notes**: 全部 task-agnostic;code map `docs/code_maps/systems/pi_observation_stack.md`
+
+### agent/pi_ext/evidence_closure.ts
+**Purpose**: pi extension — S2.6 evidence closure gate(silent ledger + submit_answer 工具 + VLM closure checker)
+**Usage**: 与 vistr_video_tools.ts 一起加载: `VISTR_PI_EXTENSION="...,agent/pi_ext/evidence_closure.ts"`
+**Inputs**: `VISTR_QUESTION` 环境变量(eval 脚本自动设置); VLM gateway `~/.pi/agent/models.json`
+**Notes**: 不注入 context(区别于 evidence_ledger.ts); one-shot gate; checker 纯文本无图
+
+### agent/pi_ext/evidence_ledger.ts
+**Purpose**: pi extension — S2.5 evidence board(tool_result hook 记录 + context hook 注入 dashboard)
+**Usage**: `VISTR_PI_EXTENSION="...,agent/pi_ext/evidence_ledger.ts"` + `VISTR_LEDGER_MODE=tail|anchor`
+**Notes**: S2.5 实验结果中性(±0~2pp); S2.6 用 evidence_closure.ts 替代(silent ledger 不注入 context)
 
 ### agent/run_plan_verify.py
 **Purpose**: 二阶段探究 runner——qwen3-vl-plus 对每题做 plan + verify 双隔离调用

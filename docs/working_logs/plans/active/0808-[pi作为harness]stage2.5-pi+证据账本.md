@@ -1,5 +1,5 @@
 ---
-status: active
+status: awaiting_approval
 created: 2026-08-08
 ---
 
@@ -427,61 +427,56 @@ S2.5 做 **evidence-only Structured Evidence Ledger**:独立 `evidence_ledger` e
 
 ### Summary
 
-- ...
-
-### Changed Files
-
-| File | Change |
-|------|--------|
-
-### Commands
-
-```bash
-# Key commands executed
-```
+- `agent/pi_ext/evidence_ledger.ts`:tool_result 确定性 mapper(agent_step 与
+  world_time_support 分离 + spatial_support)、REFINES(严格时空子集)、
+  `<EVIDENCE_STATE>` dashboard、appendEntry 持久化;零新工具、零 LLM 摘要
+- 两种注入位置做了纯位置 ablation(board 逐字节一致):
+  tail(S2.5a,追加为最新消息)vs anchor(S2.5b,嵌入原题 user 消息头部)
+- 关键源码事实(GPT 审议确认):pi `convertToLlm` 把 role:"custom" 序列化为
+  role:"user"(messages.ts:162)→ tail 注入 = 每轮伪造新 user turn(turn hijacking)
 
 ### Verification Results
 
 ```text
-# Output and conclusions
+REFINES 审计: 15 个 live session 复核,0 错误(point×bbox ⊆ interval×global 等)
+dashboard 注入位置: 冒烟中模型可原样复述且确认 anchor 位于题目文字前、同一消息内
+
+同 90 题(qwen3-vl-plus):
+              全90    4射门(24)  非射门(66)
+S2.4b(无账本)  56.7%   54.2%     57.6%
+S2.5a(tail)   56.7%   41.7%     62.1%
+S2.5b(anchor) 54.4%   58.3%     53.0%
+三版 oracle: 77.8%
+速度: 账本版 ~70-81s/题(略快于 4b 的 83s,重复观察减少)
 ```
+
+### 结论(诚实版)
+
+1. **turn hijacking 双向验证**:tail 版预测题崩塌(Billiards 1/6,"证据核算心态")
+   被 anchor 版完全修复(Billiards 5/6、射门 58.3% 系列最高)——位置决定心态
+2. **anchor 版有自己的文体副作用**(轨迹实证 #1099/#1125):FINAL 合成"文牍化"——
+   带时间戳的记录接龙推断("nearly touches"+"reversed"⇒contact)、外部先验规则
+   (nuPlan 安全余量)压过视觉复核 → Passage 4/6→1/6
+3. **evidence-only 账本净效应 ≈ 0**(三版总分都在 n=90 噪声带),它实际是
+   "推理心态旋钮":tail→覆盖/核算,anchor→档案/保守
+4. 缺的不是更好的 board,而是 **FINAL 前的强制视觉复核**(超出本阶段边界,留决策)
+
+### 已声明的混杂与债务
+
+- dashboard 末尾 meta-rule 句是轻度 reasoning 指令(两模式一致,不影响 ablation)
+- `agent_step` 实为 evidence_step(非观察工具不计数)——修复会改 dashboard 文本,
+  按约定推迟到 ablation 后
+- appendEntry 仅 audit 用,未实现 session_start 恢复(pi -p 单题单 session,不影响)
+- dashboard 渲染含 unknown×unknown 的 read(image) 条目(GPT 建议隐藏,未在本轮改)
+- 转变矩阵(Correct→Wrong per observation)未形式化统计,以 flip 分析 + 轨迹精读替代
 
 ### Outputs
 
-- ...
-
-### Remaining Issues
-
-- ...
-
-### Human Review Guide
-
-#### What changed conceptually
-
-- ...
-
-#### Execution flow
-
-```mermaid
-flowchart TD
-    A[...] --> B[...]
-```
-
-#### Core pseudocode
-
-```text
-...
-```
-
-#### Key code pointers
-
-* `path/file.py:function_name`
-
-#### Code maps created/updated
-
-* (link to new or updated code map, or N/A)
+- `outputs/predictions/pi_agentic_ext5_qwen_pt6_20260808.jsonl`(tail, 56.7%)
+- `outputs/predictions/pi_agentic_ext5b_qwen_pt6_20260808.jsonl`(anchor, 54.4%)
 
 ### Suggested Next Step
 
-- ...
-
+- 方向 A:verify-before-FINAL(终判前强制复核关键帧;改 reasoning policy,需批准)
+- 方向 B:按 GPT 路线让 board 被结构化机制"使用"(claim↔evidence 绑定)
+- 方向 C:接受净零结论,账本仅保留为轨迹审计基础设施

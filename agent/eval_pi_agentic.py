@@ -64,17 +64,22 @@ PROMPT = """你是视频时空推理专家。当前工作目录下有一个源�
 【题目】{question}
 【选项】{options}
 
-要求：
-- 充分分析后再作答，但不要无限调用工具；一旦有足够证据就立即输出答案
-- 最后【必须】单独一行输出答案，格式：FINAL: <选项原文之一>
-- 不要把答案只写在思考里，FINAL 行是唯一评分依据"""
+要求：分析完成后，调用 submit_answer 工具提交你的答案（提供选项原文和你答案依赖的最关键视觉事实）。{final_instruction}"""
+
+FINAL_INSTRUCTION_WITH_SUBMIT = """\
+submit_answer 会检查你的关键事实是否已被直接视觉观察确认。如果发现证据缺口，你有一次机会去重新观察关键时刻再提交。\
+submit_answer 确认后，在新的一行写：FINAL: <选项原文之一>"""
+
+FINAL_INSTRUCTION_NO_SUBMIT = """\
+最后单独一行输出你的答案，格式：FINAL: <选项原文之一>"""
 
 EXTRA_TOOLS_NOTE = """
 - index_video 工具：获取视频的粗粒度带 caption 时间线（纯文本），用于发现值得看的时刻
 - read_video_sequence 工具：一次查看一个连续时间片段（多帧按时序排列）
 - read_multiframe 工具：一次联合查看若干已选定的证据时刻的帧
 - read_crop 工具：用归一化 bbox（0-1000）放大查看某帧/某图的局部区域（原始分辨率）
-- semantic_crop 工具：用英文文字描述目标（如 "the hand touching the tower"），由 grounding 后端定位并返回高清局部图+定位回执"""
+- semantic_crop 工具：用英文文字描述目标（如 "the hand touching the tower"），由 grounding 后端定位并返回高清局部图+定位回执
+- submit_answer 工具：提交最终答案（提供选项原文 + 最关键视觉事实），系统会检查证据闭合"""
 
 
 TOOL_CALL_RE = re.compile(
@@ -250,20 +255,29 @@ def solve_agentic(sample, timeout=600):
 
     with tempfile.TemporaryDirectory(prefix="pi_ws_") as ws:
         shutil.copy(video_path, os.path.join(ws, "video.mp4"))
-        prompt = PROMPT.format(question=question, options=" / ".join(options),
-                               extra_tools=EXTRA_TOOLS_NOTE if EXTENSION else "")
+        has_submit = EXTENSION and "evidence_closure" in EXTENSION
+        prompt = PROMPT.format(
+            question=question, options=" / ".join(options),
+            extra_tools=EXTRA_TOOLS_NOTE if EXTENSION else "",
+            final_instruction=FINAL_INSTRUCTION_WITH_SUBMIT if has_submit else FINAL_INSTRUCTION_NO_SUBMIT,
+        )
+        env = agent_env()   # PATH fix (ffmpeg/ffprobe/cv2 on PATH)
+        if has_submit:
+            env["VISTR_QUESTION"] = f"{question} Options: {' / '.join(options)}"
         cmd = [PI_BIN, "-p", "--mode", "json",
                "--provider", PROVIDER, "--model", MODEL]
         if EXTENSION:
             for ext in EXTENSION.split(","):
-                if ext.strip():
-                    cmd += ["-e", ext.strip()]
+                ext = ext.strip()
+                if ext:
+                    cmd += ["-e", os.path.join(PROJ_DIR, ext) if not os.path.isabs(ext) else ext]
         cmd.append(prompt)
         try:
             last_err = None
             for attempt in range(3):
                 proc = subprocess.run(cmd, capture_output=True, text=True,
-                                      timeout=timeout, cwd=ws, env=agent_env())
+                                      timeout=timeout, cwd=ws, env=env)
+                out = proc.stdout.strip()
                 if proc.returncode == 0:
                     break
                 last_err = f"pi exit {proc.returncode}: {proc.stderr.strip()[:300]}"
@@ -279,6 +293,13 @@ def solve_agentic(sample, timeout=600):
             tools_executed = sum(1 for c in tool_calls if c["id"] in executed_ids)
             tool_errors = sum(1 for r in tool_results if r["isError"])
             pred = extract_answer(final_text, reasoning, options)
+            closure_info = {}
+            if has_submit:
+                for line in (proc.stderr or "").split("\n"):
+                    if "[evidence-closure] submit_answer" in line:
+                        closure_info["submit_calls"] = closure_info.get("submit_calls", 0) + 1
+                    elif "[evidence-closure] checker reply:" in line:
+                        closure_info["checker_reply"] = line.split("checker reply:")[-1].strip()
             return {
                 "id": sample["id"], "task": sample["task"],
                 "gt": sample["answer"], "pred": pred,
@@ -298,6 +319,7 @@ def solve_agentic(sample, timeout=600):
                 "tool_errors": tool_errors,
                 "elapsed_s": time.time() - t0,
                 "model": MODEL,
+                **({"closure": closure_info} if closure_info else {}),
             }
         except Exception as e:
             return {

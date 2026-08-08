@@ -5,7 +5,11 @@ last_updated: 2026-08-08
 
 # ViSTR-Agent — Active Work State
 
-## Current Focus: pi harness 观察原语体系(已完成四阶段)
+## Current Focus: S2.6 Evidence Closure — answer-time visual verification
+
+pi (v0.84.0) harness + extension 路线持续推进。S2.6 在 S2.4b 观察原语基础上增加
+**evidence closure gate**: silent ledger 后台记录观察来源,agent 提交答案时检查关键事实
+是否有直接视觉证据闭合,如有缺口允许一次 re-observation。
 
 ## Current Focus: Bug C 根治 + 8b-thinking × vLLM 全量重跑(2026-08-08)
 
@@ -40,34 +44,34 @@ VISTR_PI_MODEL=qwen3-vl-8b-thinking`）。vLLM 需 `--enable-auto-tool-choice
 --tool-call-parser hermes`；pi 累积式 args 补丁需重打：
 `/opt/conda/bin/python scripts/patch_pi_cumulative_args.py`。
 
-**合并说明（2026-08-08）**：本文件由 tqh(Bug C 修复线) × main(观察原语线)合并，
-两线工作均已合入 tqh 分支，`eval_pi_agentic.py` 同时支持 JSON 轨迹落盘与
-extension 观察原语（`VISTR_PI_EXTENSION`）。
+**合并说明（2026-08-08，第二轮）**：tqh(Bug C 修复 + 轨迹落盘线) × main(观察原语
+S2.1-S2.4b + S2.5 证据账本 + **S2.6 evidence closure**)已合入 tqh。`eval_pi_agentic.py`
+同时支持:JSON 轨迹落盘(默认)+ extension 观察原语 + evidence_closure 提交门控
+(`VISTR_PI_EXTENSION=vistr_video_tools,evidence_closure` 时启用 submit_answer 流程)。
 
-pi (v0.84.0) 为 harness;通过 extension 逐步构建 task-agnostic 观察原语,
-**只改观察接口不教任务解法**,qwen3-vl-plus 在 90 题均匀子集上 50.0% → **56.7%**,
-首超 SpatialClaw(53.3%)。计划书: `plans/completed/0807-[pi作为harness]stage2.1-pi+多图阅读工具.md`,
-run log: `runs/2026-08-07_pi_observation_primitives.md`。
+**S2.6 结果**: 90 题均匀子集 **62.2%** (S2.4b: 56.7%, +5.5pp; SpatialClaw: 56.6%)
 
-**观察原语四件套**(`agent/pi_ext/vistr_video_tools.ts`):
-- `read`(pi 原生)单帧 | `read_crop` normalized bbox 空间放大
-- `read_video_sequence` 连续时间片段 | `read_multiframe` 离散证据帧联查
-- `index_video` batch VLM caption 时间线(无题目上下文)
-- `semantic_crop` 文字描述 → GroundingDINO 定位 → 隔离 VLM 选候选 → 高清裁剪+回执
+**Stage progression**:
+- S2.1–S2.4b: 观察原语(how to observe) → 56.7%
+- S2.5: evidence board 注入(改变模型推理心态,中性结果) → 54.4~56.7%
+- **S2.6: evidence closure gate(when to stop reasoning and re-observe) → 62.2%**
+
+**Pi extensions**(`agent/pi_ext/`):
+- `vistr_video_tools.ts` — 5 观察工具(index/sequence/multiframe/crop/semantic_crop)
+- `evidence_closure.ts` — S2.6: silent ledger + `submit_answer` 工具 + VLM closure checker
+- `evidence_ledger.ts` — S2.5: context 注入 evidence board(当前不加载)
 
 **基础设施**: `scripts/perception_service.py` — 常驻 perception model-pool(:7876,
-GroundingDINO GPU 常驻 MI308X;可扩 SAM2/DA3/VGGT);启动:
+GroundingDINO GPU 常驻 MI308X);启动:
 `nohup .../star/bin/python -u scripts/perception_service.py --port 7876 --eager &`
 
 **评测约定**: 默认 `--per-task 6`(90 题);全量仅用户明确要求。
 
-**其他资产**: Case viewer(Flask :7875,S1/S2/S2.1/S2.2 轨迹 tab 切换);
-opus S1 全量 57.1%;HF 轨迹数据集 MihailSlutsky/vistr-pi-trajectories。
-
 **Next 候选**:
-1. 运动感知三弱项(Fall/RelVel/Vehicle 各 1/6):光流/跟踪后端进 model pool
-2. 观察策略融合(S2.x oracle 76.7%)
-3. opus + 全套原语
+1. S2.6 full-split eval (403 samples) 确认总体提升
+2. 改进 re-observation guidance (告诉 agent 具体看哪个时间段)
+3. 运动感知弱项(Fall/RelVel):光流/跟踪后端进 model pool
+4. opus + 全套原语 + closure
 
 ## Key Results Summary
 
@@ -78,7 +82,9 @@ opus S1 全量 57.1%;HF 轨迹数据集 MihailSlutsky/vistr-pi-trajectories。
 | qwen3-vl-plus + V4 tools | 55.6% | 403 |
 | SpatialClaw | 56.6% | 403 |
 | claude-opus-4-6 via pi S1 | 57.1% | 403 |
-| **pi S2.4b(全套观察原语)** | **56.7%** | 90(均匀) |
+| pi S2.4b(全套观察原语) | 56.7% | 90(均匀) |
+| pi S2.5 evidence board(tail/anchor) | 54.4~56.7% | 90(均匀) |
+| **pi S2.6 evidence closure** | **62.2%** | 90(均匀) |
 | qwen3-vl-8b-thinking baseline | 50.6% | 403 |
 | qwen3-vl-8b-thinking + V4 tools | 47.4% | 107 (partial) |
 | qwen3-vl-8b-thinking + pi agentic (修复后) | **51.4%** | 403 |

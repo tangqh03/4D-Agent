@@ -1,7 +1,7 @@
 ---
 status: active
 scope: general
-last_verified: 2026-07-31
+last_verified: 2026-08-08
 owner: gaozhe
 ---
 
@@ -92,3 +92,15 @@ Index of all output directories and artifacts produced by this project.
 **Path**: `outputs/predictions/pi_claude-opus-4-6_dev_20260807.jsonl`（S1 全量 403, **57.1%**）+ `pi_agentic_claude-opus-4-6_dev_20260807.jsonl`（S2 部分 48/403,用户叫停）
 **Produced by**: `agent/eval_pi.py` / `eval_pi_agentic.py`（VISTR_PI_PROVIDER=idealab-anthropic）
 **Notes**: idealab 网关偶发 "use case" 错误→脚本已带重试;S2 需 --timeout 1200
+
+### pi S2.5 evidence board 结果
+**Path**: `outputs/predictions/pi_agentic_ext5_qwen_pt6_20260808.jsonl`（tail 模式）+ `pi_agentic_ext5b_qwen_pt6_20260808.jsonl`（anchor 模式）
+**Produced by**: `agent/eval_pi_agentic.py` + `evidence_ledger.ts`
+**Format**: 同 Stage 2
+**Notes**: S2.5a tail 56.7% / S2.5b anchor 54.4%（90 题均匀子集）;结论:注入 evidence board 改变推理心态但不提升总分
+
+### pi S2.6 evidence closure 结果
+**Path**: `outputs/predictions/pi_s26_pt6_20260808.jsonl`（per-task 6, **62.2%**）+ `pi_s26_pt1_20260808.jsonl`（per-task 1, 53.3%）
+**Produced by**: `agent/eval_pi_agentic.py` + `vistr_video_tools.ts` + `evidence_closure.ts`
+**Format**: 同 Stage 2,额外含 `closure` 字段（submit_calls, checker_reply）
+**Notes**: silent ledger + submit_answer + VLM closure checker; 相比 S2.4b +5.5pp; Interaction/Mikado/Passage/Jenga/Swimming/Soccer 提升最大(+16~17pp each)
