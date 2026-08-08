@@ -45,6 +45,12 @@ Index of all scripts in this project. Each entry documents purpose, usage, input
 **Outputs**: `outputs/predictions/pi_<model>_<timestamp>.jsonl`
 **Notes**: 环境变量 `VISTR_PI_PROVIDER` / `VISTR_PI_MODEL` 切换; pi session 会积累在 `~/.pi/agent/sessions/`,量大需清理
 
+### agent/pi_ext/vistr_video_tools.ts
+**Purpose**: pi extension — 观察原语五件套(index_video / read_video_sequence / read_multiframe / read_crop / semantic_crop)
+**Usage**: `pi -p -e agent/pi_ext/vistr_video_tools.ts ...` 或评测脚本 `VISTR_PI_EXTENSION` 环境变量
+**Inputs**: workspace 内视频/图片;semantic_crop 依赖 perception 服务(:7876);caption/selection subcall 走 `~/.pi/agent/models.json` 网关
+**Notes**: 全部 task-agnostic;code map `docs/code_maps/systems/pi_observation_stack.md`
+
 ### agent/run_plan_verify.py
 **Purpose**: 二阶段探究 runner——qwen3-vl-plus 对每题做 plan + verify 双隔离调用
 **Usage**: `/opt/conda/bin/python -u agent/run_plan_verify.py [--limit N] [--workers 8] [--task Basketball_Shot]`
@@ -73,6 +79,26 @@ Index of all scripts in this project. Each entry documents purpose, usage, input
 **Usage**: `/home/admin/.conda/envs/star/bin/python -u scripts/pi_case_viewer.py --port 7875`;notebook 代理访问 `/proxy/7875/`
 **Inputs**: `web/case_viewer/data/`(先跑 build_case_viewer.py)+ benchmark 视频
 **Notes**: 无 websocket 依赖;`web/case_viewer/index.html` 为静态版备用
+
+### scripts/upload_hf_pi_trajs.py
+**Purpose**: 打包 S1/S2 pi 轨迹(session JSONL + manifest)并上传 HF dataset(`MihailSlutsky/vistr-pi-trajectories`)
+**Usage**: `HF_ENDPOINT=https://hf-mirror.com /home/admin/.conda/envs/star/bin/python -u scripts/upload_hf_pi_trajs.py [--skip-upload]`
+**Inputs**: `~/.pi/agent/sessions/` + `outputs/predictions/pi_*_dev_20260806.jsonl`;token `/mnt/xlab-nas-wm/gaozhe.gz/hf_datasets/hf_tokens.txt`
+**Outputs**: `outputs/hf_export/stage{1,2}_trajectories.tar.gz`
+**Notes**: S1 按首帧 md5 匹配(题目文本同任务内重复);S2 按题目+答案指纹;参考 GenDoP upload 模式
+
+### scripts/perception_service.py
+**Purpose**: 常驻 perception model-pool 服务(GroundingDINO GPU 常驻;可扩 SAM2/DA3/VGGT)
+**Usage**: `nohup /home/admin/.conda/envs/star/bin/python -u scripts/perception_service.py --port 7876 --eager > /tmp/perception_service.log 2>&1 &`
+**Inputs**: 权重 `/mnt/xlab-nas-wm/gaozhe.gz/hf_datasets/grounding-dino-base`
+**Outputs**: HTTP `/health` `/ground` `/annotate`(供 semantic_crop extension 调用)
+**Notes**: extension 禁止自行加载权重;文本 prompt 仅英文(BERT 词表)
+
+### scripts/grounding_probe.py
+**Purpose**: semantic_crop vs read_crop 小规模 grounding 对比(5 探针,首发命中率/调用次数)
+**Usage**: `/opt/conda/bin/python scripts/grounding_probe.py --tool semantic_crop|read_crop`
+**Outputs**: `outputs/grounding_probe/<tool>/`(crop 图)+ `<tool>_results.json`
+**Notes**: 需 perception 服务(7876)在线;探针为 task-agnostic 目标描述
 
 ### visualize_results.py
 **Purpose**: ViSTR-Bench 可视化前端 — leaderboard 总览 dashboard（PNG）+ 样本级回放视频（MP4）

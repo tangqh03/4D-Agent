@@ -66,6 +66,7 @@ Reference material loaded on demand.
 |----|-------|------|
 | `knowledge:vistr-bench` | ViSTR-Bench 论文摘要：任务/榜单/错误分析/改进方向 | `docs/knowledge/vistr_bench.md` |
 | `knowledge:tool-design-v1` | 工具设计报告 v1：9 工具覆盖矩阵 + 实施顺序 | `docs/knowledge/tool_design_v1.md` |
+| `knowledge:pi-harness` | pi harness 数据流/工作流刻画(mermaid):架构、agent loop、S1/S2 评测链路、兼容坑 | `docs/knowledge/pi_harness.md` |
 
 ## ADRs
 

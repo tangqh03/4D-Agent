@@ -81,3 +81,14 @@ Index of all output directories and artifacts produced by this project.
 **Produced by**: `scripts/build_case_viewer.py`
 **Format**: `cases.json`（S1/S2 join + 轨迹事件）+ `images/<id>/*.jpg`（agent 看过的帧,640px）
 **Notes**: 前端 `scripts/pi_case_viewer.py`（Flask :7875）读取;重跑评测后重新构建
+
+### pi 观察原语系列 (S2.1~S2.4b, 90 题均匀子集)
+**Path**: `outputs/predictions/pi_agentic_ext{,2,3,4b}_qwen_pt6_20260807.jsonl` + `pi_agentic_ext4_...`（无效实验,保留供审计）
+**Produced by**: `agent/eval_pi_agentic.py --per-task 6` + `VISTR_PI_EXTENSION`
+**Format**: 同 Stage 2
+**Notes**: S2.1 多图 51.1% / S2.2 index 51.1% / S2.3 read_crop 48.9% / **S2.4b semantic_crop 56.7%**; run log `runs/2026-08-07_pi_observation_primitives.md`; grounding 探针 `outputs/grounding_probe/`
+
+### claude-opus-4-6 via pi 结果
+**Path**: `outputs/predictions/pi_claude-opus-4-6_dev_20260807.jsonl`（S1 全量 403, **57.1%**）+ `pi_agentic_claude-opus-4-6_dev_20260807.jsonl`（S2 部分 48/403,用户叫停）
+**Produced by**: `agent/eval_pi.py` / `eval_pi_agentic.py`（VISTR_PI_PROVIDER=idealab-anthropic）
+**Notes**: idealab 网关偶发 "use case" 错误→脚本已带重试;S2 需 --timeout 1200

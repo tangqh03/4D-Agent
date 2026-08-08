@@ -26,6 +26,14 @@ S1_PATH = os.path.join(PROJ, "outputs", "predictions",
                        "pi_qwen3-vl-plus_dev_20260806.jsonl")
 S2_PATH = os.path.join(PROJ, "outputs", "predictions",
                        "pi_agentic_qwen3-vl-plus_dev_20260806.jsonl")
+S21_PATH = os.path.join(PROJ, "outputs", "predictions",
+                        "pi_agentic_ext_qwen_pt6_20260807.jsonl")
+S22_PATH = os.path.join(PROJ, "outputs", "predictions",
+                        "pi_agentic_ext2_qwen_pt6_20260807.jsonl")
+S23_PATH = os.path.join(PROJ, "outputs", "predictions",
+                        "pi_agentic_ext3_qwen_pt6_20260807.jsonl")
+S24_PATH = os.path.join(PROJ, "outputs", "predictions",
+                        "pi_agentic_ext4b_qwen_pt6_20260807.jsonl")
 SESS_GLOB = os.path.expanduser("~/.pi/agent/sessions/--tmp-pi_ws_*/*.jsonl")
 OUT_DIR = os.path.join(PROJ, "web", "case_viewer", "data")
 IMG_W = 640
@@ -97,18 +105,11 @@ def parse_session(path):
     return question, final_text, events, images
 
 
-def main():
-    os.makedirs(os.path.join(OUT_DIR, "images"), exist_ok=True)
-    s1 = {r["id"]: r for r in load_jsonl(S1_PATH)}
-    s2rows = load_jsonl(S2_PATH)
-
+def match_sessions(pred_rows, sess_files):
     by_question = {}
-    for r in s2rows:
+    for r in pred_rows:
         by_question.setdefault(r["question"].strip(), []).append(r)
-
     matched = {}
-    sess_files = sorted(glob.glob(SESS_GLOB), key=os.path.getmtime)
-    print(f"sessions: {len(sess_files)}")
     for sf in sess_files:
         try:
             question, final_text, events, images = parse_session(sf)
@@ -116,44 +117,80 @@ def main():
             continue
         if not question or not events:
             continue
-        cands = by_question.get(question, [])
         row = None
-        for r in cands:
-            tail = r.get("raw_answer", "")[-200:]
+        for r in by_question.get(question, []):
+            tail = (r.get("raw_answer") or "")[-200:]
             if tail and tail in final_text[-1000:]:
                 row = r
                 break
-        if row is None and len(cands) == 1:
-            row = cands[0]
+        if row is None and len(by_question.get(question, [])) == 1:
+            row = by_question[question][0]
         if row is None:
             continue
         # later sessions win (reruns overwrite smoke attempts)
         matched[row["id"]] = (events, images)
+    return matched
 
-    print(f"matched trajectories: {len(matched)}/{len(s2rows)}")
+
+def save_traj(cid, matched, subdir):
+    if cid not in matched:
+        return []
+    events, images = matched[cid]
+    img_dir = os.path.join(OUT_DIR, subdir, str(cid))
+    saved = {}
+    traj = []
+    for ev in events:
+        ev = dict(ev)
+        if ev["t"] == "img":
+            idx = ev.pop("idx")
+            if idx not in saved:
+                data = shrink_image(images[idx])
+                if data is None:
+                    continue
+                os.makedirs(img_dir, exist_ok=True)
+                fn = f"{idx:02d}.jpg"
+                with open(os.path.join(img_dir, fn), "wb") as f:
+                    f.write(data)
+                saved[idx] = f"{subdir}/{cid}/{fn}"
+            ev["src"] = saved[idx]
+        traj.append(ev)
+    return traj
+
+
+def main():
+    os.makedirs(os.path.join(OUT_DIR, "images"), exist_ok=True)
+    s1 = {r["id"]: r for r in load_jsonl(S1_PATH)}
+    s2rows = load_jsonl(S2_PATH)
+    s21 = {}
+    if os.path.exists(S21_PATH):
+        s21 = {r["id"]: r for r in load_jsonl(S21_PATH)}
+    s22 = {}
+    if os.path.exists(S22_PATH):
+        s22 = {r["id"]: r for r in load_jsonl(S22_PATH)}
+    s23 = {}
+    if os.path.exists(S23_PATH):
+        s23 = {r["id"]: r for r in load_jsonl(S23_PATH)}
+    s24 = {}
+    if os.path.exists(S24_PATH):
+        s24 = {r["id"]: r for r in load_jsonl(S24_PATH)}
+
+    sess_files = sorted(glob.glob(SESS_GLOB), key=os.path.getmtime)
+    print(f"sessions: {len(sess_files)}")
+    matched = match_sessions(s2rows, sess_files)
+    print(f"S2 matched trajectories: {len(matched)}/{len(s2rows)}")
+    matched21 = match_sessions(list(s21.values()), sess_files) if s21 else {}
+    print(f"S2.1 matched trajectories: {len(matched21)}/{len(s21)}")
+    matched22 = match_sessions(list(s22.values()), sess_files) if s22 else {}
+    print(f"S2.2 matched trajectories: {len(matched22)}/{len(s22)}")
+    matched23 = match_sessions(list(s23.values()), sess_files) if s23 else {}
+    print(f"S2.3 matched trajectories: {len(matched23)}/{len(s23)}")
+    matched24 = match_sessions(list(s24.values()), sess_files) if s24 else {}
+    print(f"S2.4b matched trajectories: {len(matched24)}/{len(s24)}")
 
     cases = []
     for r in sorted(s2rows, key=lambda x: (x["task"], x["id"])):
         cid = r["id"]
-        traj = []
-        if cid in matched:
-            events, images = matched[cid]
-            img_dir = os.path.join(OUT_DIR, "images", str(cid))
-            saved = {}
-            for ev in events:
-                if ev["t"] == "img":
-                    idx = ev.pop("idx")
-                    if idx not in saved:
-                        data = shrink_image(images[idx])
-                        if data is None:
-                            continue
-                        os.makedirs(img_dir, exist_ok=True)
-                        fn = f"{idx:02d}.jpg"
-                        with open(os.path.join(img_dir, fn), "wb") as f:
-                            f.write(data)
-                        saved[idx] = f"images/{cid}/{fn}"
-                    ev["src"] = saved[idx]
-                traj.append(ev)
+        traj = save_traj(cid, matched, "images")
         s1r = s1.get(cid, {})
         cases.append({
             "id": cid, "task": r["task"], "dimension": r.get("dimension", ""),
@@ -165,6 +202,23 @@ def main():
                    "raw": (r.get("raw_answer") or "")[-500:],
                    "elapsed": round(r.get("elapsed_s", 0))},
             "traj": traj,
+            "s21": ({"pred": s21[cid].get("pred"), "correct": s21[cid].get("correct"),
+                     "raw": (s21[cid].get("raw_answer") or "")[-500:],
+                     "elapsed": round(s21[cid].get("elapsed_s", 0))}
+                    if cid in s21 else None),
+            "traj21": save_traj(cid, matched21, "images21"),
+            "s22": ({"pred": s22[cid].get("pred"), "correct": s22[cid].get("correct"),
+                     "elapsed": round(s22[cid].get("elapsed_s", 0))}
+                    if cid in s22 else None),
+            "traj22": save_traj(cid, matched22, "images22"),
+            "s23": ({"pred": s23[cid].get("pred"), "correct": s23[cid].get("correct"),
+                     "elapsed": round(s23[cid].get("elapsed_s", 0))}
+                    if cid in s23 else None),
+            "traj23": save_traj(cid, matched23, "images23"),
+            "s24": ({"pred": s24[cid].get("pred"), "correct": s24[cid].get("correct"),
+                     "elapsed": round(s24[cid].get("elapsed_s", 0))}
+                    if cid in s24 else None),
+            "traj24": save_traj(cid, matched24, "images24"),
         })
 
     with open(os.path.join(OUT_DIR, "cases.json"), "w") as f:

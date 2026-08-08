@@ -33,7 +33,15 @@ def api_cases():
     slim = [{k: c[k] for k in
              ("id", "task", "dimension", "question", "options", "gt")} |
             {"s1": {"pred": c["s1"]["pred"], "correct": c["s1"]["correct"]},
-             "s2": {"pred": c["s2"]["pred"], "correct": c["s2"]["correct"]}}
+             "s2": {"pred": c["s2"]["pred"], "correct": c["s2"]["correct"]},
+             "s21": ({"pred": c["s21"]["pred"], "correct": c["s21"]["correct"]}
+                     if c.get("s21") else None),
+             "s22": ({"pred": c["s22"]["pred"], "correct": c["s22"]["correct"]}
+                     if c.get("s22") else None),
+             "s23": ({"pred": c["s23"]["pred"], "correct": c["s23"]["correct"]}
+                     if c.get("s23") else None),
+             "s24": ({"pred": c["s24"]["pred"], "correct": c["s24"]["correct"]}
+                     if c.get("s24") else None)}
             for c in CASES]
     return jsonify(slim)
 
@@ -114,6 +122,9 @@ video { max-width:480px; border-radius:8px; background:#000; }
 .ev-img img.zoom { max-width:100%; cursor:zoom-out; }
 .dim { color:var(--dim); }
 #empty { color:var(--dim); margin-top:40vh; text-align:center; }
+.tab-btn { background:var(--panel); color:var(--fg); border:1px solid var(--line);
+           border-radius:5px 5px 0 0; padding:5px 14px; font:inherit; cursor:pointer; }
+.tab-btn.tab-sel { background:#233052; color:var(--accent); border-color:var(--accent); font-weight:bold; }
 </style></head><body>
 <div id="side">
   <div id="filters">
@@ -124,6 +135,7 @@ video { max-width:480px; border-radius:8px; background:#000; }
       <option value="s1win">S1✓ S2✗ (工具输)</option>
       <option value="bothok">双✓</option>
       <option value="bothbad">双✗</option>
+      <option value="has21">有 S2.1 (90题子集)</option>
     </select>
     <input id="f-q" placeholder="搜索题目/id" size="16">
   </div>
@@ -159,6 +171,7 @@ function filtered() {
     if (fl === 's1win' && !(c.s1.correct && !c.s2.correct)) return false;
     if (fl === 'bothok' && !(c.s1.correct && c.s2.correct)) return false;
     if (fl === 'bothbad' && (c.s1.correct || c.s2.correct)) return false;
+    if (fl === 'has21' && !c.s21) return false;
     if (q && !(c.question.toLowerCase().includes(q) || String(c.id) === q)) return false;
     return true;
   });
@@ -182,11 +195,37 @@ function render() {
       `<span class="badge b-task">${c.task}</span>` +
       `<span class="badge ${c.s1.correct ? 'b-ok' : 'b-bad'}">S1</span>` +
       `<span class="badge ${c.s2.correct ? 'b-ok' : 'b-bad'}">S2</span>` +
+      (c.s21 ? `<span class="badge ${c.s21.correct ? 'b-ok' : 'b-bad'}">S2.1</span>` : '') +
+      (c.s22 ? `<span class="badge ${c.s22.correct ? 'b-ok' : 'b-bad'}">S2.2</span>` : '') +
+      (c.s23 ? `<span class="badge ${c.s23.correct ? 'b-ok' : 'b-bad'}">S2.3</span>` : '') +
+      (c.s24 ? `<span class="badge ${c.s24.correct ? 'b-ok' : 'b-bad'}">S2.4b</span>` : '') +
       `<span class="dim">#${c.id}</span>` +
       `<div class="q">${esc(c.question)}</div>`;
     div.onclick = () => { sel = c.id; render(); show(c.id); };
     list.appendChild(div);
   }
+}
+
+function trajHtml(traj, title) {
+  if (!traj || !traj.length) return '';
+  let s = `<div class="card" style="margin-bottom:14px"><b>${title}</b> <span class="dim">(${
+        traj.filter(e => e.t === 'tool').length} 次工具调用, ${
+        traj.filter(e => e.t === 'img').length} 张图)</span>`;
+  for (const ev of traj) {
+    if (ev.t === 'text') {
+      const cls = /FINAL[:：]/.test(ev.text) ? 'ev-final' : 'ev-text';
+      s += `<div class="ev ${cls}">${esc(ev.text)}</div>`;
+    } else if (ev.t === 'tool') {
+      s += `<div class="ev ev-tool">▶ ${ev.name} ${esc(ev.args)}</div>`;
+    } else if (ev.t === 'result') {
+      s += `<div class="ev ev-result">${esc(ev.text)}</div>`;
+    } else if (ev.t === 'img' && ev.src) {
+      s += `<div class="ev ev-img"><img loading="lazy"
+            src="api/img?src=${encodeURIComponent(ev.src)}"
+            onclick="this.classList.toggle('zoom')"></div>`;
+    }
+  }
+  return s + `</div>`;
 }
 
 async function show(id) {
@@ -204,34 +243,42 @@ async function show(id) {
         <span class="${c.s1.correct ? 'b-ok' : 'b-bad'} badge">${c.s1.pred ?? '—'}</span>
         <span>Stage 2 (工具)</span>
         <span class="${c.s2.correct ? 'b-ok' : 'b-bad'} badge">${c.s2.pred ?? '—'}</span>
-        <span class="dim">S2 耗时</span><span class="dim">${c.s2.elapsed}s</span>
+        ${c.s21 ? `<span>Stage 2.1 (多图工具)</span>
+        <span class="${c.s21.correct ? 'b-ok' : 'b-bad'} badge">${c.s21.pred ?? '—'}</span>` : ''}
+        ${c.s22 ? `<span>Stage 2.2 (index+证据帧)</span>
+        <span class="${c.s22.correct ? 'b-ok' : 'b-bad'} badge">${c.s22.pred ?? '—'}</span>` : ''}
+        ${c.s23 ? `<span>Stage 2.3 (read_crop)</span>
+        <span class="${c.s23.correct ? 'b-ok' : 'b-bad'} badge">${c.s23.pred ?? '—'}</span>` : ''}
+        ${c.s24 ? `<span>Stage 2.4b (semantic_crop)</span>
+        <span class="${c.s24.correct ? 'b-ok' : 'b-bad'} badge">${c.s24.pred ?? '—'}</span>` : ''}
+        <span class="dim">S2/S2.1 耗时</span><span class="dim">${c.s2.elapsed}s${c.s21 ? ' / '+c.s21.elapsed+'s' : ''}</span>
         </div></div>`;
   h += `</div>`;
-  if (c.traj.length) {
-    h += `<div class="card"><b>Stage 2 轨迹</b> <span class="dim">(${
-          c.traj.filter(e => e.t === 'tool').length} 次工具调用, ${
-          c.traj.filter(e => e.t === 'img').length} 张图)</span>`;
-    for (const ev of c.traj) {
-      if (ev.t === 'text') {
-        const cls = /FINAL[:：]/.test(ev.text) ? 'ev-final' : 'ev-text';
-        h += `<div class="ev ${cls}">${esc(ev.text)}</div>`;
-      } else if (ev.t === 'tool') {
-        h += `<div class="ev ev-tool">▶ ${ev.name} ${esc(ev.args)}</div>`;
-      } else if (ev.t === 'result') {
-        h += `<div class="ev ev-result">${esc(ev.text)}</div>`;
-      } else if (ev.t === 'img' && ev.src) {
-        h += `<div class="ev ev-img"><img loading="lazy"
-              src="api/img?src=${encodeURIComponent(ev.src)}"
-              onclick="this.classList.toggle('zoom')"></div>`;
-      }
-    }
-    h += `</div>`;
+  const trajs = [];
+  if (c.traj24 && c.traj24.length) trajs.push(['S2.4b (semantic_crop)', c.traj24]);
+  if (c.traj23 && c.traj23.length) trajs.push(['S2.3 (read_crop)', c.traj23]);
+  if (c.traj22 && c.traj22.length) trajs.push(['S2.2 (index+证据帧)', c.traj22]);
+  if (c.traj21 && c.traj21.length) trajs.push(['S2.1 (多图工具)', c.traj21]);
+  if (c.traj && c.traj.length) trajs.push(['S2 (原生工具)', c.traj]);
+  if (trajs.length) {
+    window._trajs = trajs;
+    h += `<div id="traj-tabs" style="margin-bottom:8px">` + trajs.map((t, i) =>
+      `<button class="tab-btn" id="tab-${i}" onclick="showTraj(${i})">${t[0]}</button>`
+    ).join(' ') + `</div><div id="traj-pane"></div>`;
   } else {
     h += `<div class="card"><b>Stage 2 原始回答(无轨迹)</b>
           <div class="ev-text dim">${esc(c.s2.raw)}</div></div>`;
   }
   m.innerHTML = h;
   m.scrollTop = 0;
+  if (trajs.length) showTraj(0);
+}
+
+function showTraj(i) {
+  const [title, traj] = window._trajs[i];
+  document.querySelectorAll('.tab-btn').forEach((b, j) =>
+    b.classList.toggle('tab-sel', j === i));
+  document.getElementById('traj-pane').innerHTML = trajHtml(traj, title + ' 轨迹');
 }
 </script></body></html>"""
 

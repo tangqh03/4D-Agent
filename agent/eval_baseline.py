@@ -50,7 +50,7 @@ def _frames_b64(video_path, n=8):
     return out
 
 
-def load_samples(split="dev", tasks=None, limit=None):
+def load_samples(split="dev", tasks=None, limit=None, per_task=None):
     with open(DATA_PATH) as f:
         data = json.load(f)
     with open(SPLIT_PATH) as f:
@@ -65,6 +65,17 @@ def load_samples(split="dev", tasks=None, limit=None):
         samples = [data_by_id[i] for i in ids if i in data_by_id]
     if tasks:
         samples = [s for s in samples if s["task"] in tasks]
+    if per_task:
+        by_task = {}
+        for s in samples:
+            by_task.setdefault(s["task"], []).append(s)
+        picked = []
+        for t in sorted(by_task):
+            group = by_task[t]
+            k = min(per_task, len(group))
+            idx = [round(i * (len(group) - 1) / max(k - 1, 1)) for i in range(k)]
+            picked.extend(group[j] for j in sorted(set(idx)))
+        samples = picked
     if limit:
         samples = samples[:limit]
     return samples
@@ -131,13 +142,14 @@ def main():
     parser.add_argument("--split", default="dev", choices=["dev", "eval", "all"])
     parser.add_argument("--tasks", type=str, default="")
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--per-task", type=int, default=None)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--output", type=str, default="")
     parser.add_argument("--max-tokens", type=int, default=100)
     args = parser.parse_args()
 
     tasks_filter = [t.strip() for t in args.tasks.split(",") if t.strip()] or None
-    samples = load_samples(args.split, tasks_filter, args.limit)
+    samples = load_samples(args.split, tasks_filter, args.limit, per_task=args.per_task)
     print(f"Model: {llm.MODEL}")
     print(f"Loaded {len(samples)} samples (split={args.split}, tasks={tasks_filter})")
 

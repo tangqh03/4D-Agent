@@ -20,6 +20,7 @@ These rules apply to every session, every task, every agent.
 - Never delete files without explicit user confirmation.
 - Never run destructive git ops (force-push, reset --hard) without asking.
 - Long-running or expensive operations (GPU inference, batch evals, model/data downloads): always confirm first.
+- Evaluations default to per-task uniform sampling (`--per-task N`, e.g. N=6 → 90 samples); full-split runs ONLY when the user explicitly asks (user rule, 2026-08-07).
 - Iterate and tune ONLY on the ViSTR-Bench public split (670 QA pairs). The private held-out set is off-limits for any tuning.
 
 ## Environment

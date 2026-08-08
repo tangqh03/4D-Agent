@@ -5,84 +5,84 @@ last_updated: 2026-08-08
 
 # ViSTR-Agent — Active Work State
 
-## Current Focus: Bug C 已根治 — vLLM serving 层修复生效（2026-08-08）
+## Current Focus: pi harness 观察原语体系(已完成四阶段)
 
-**根因**（两方向互补调查）：8b-thinking 模型在多轮工具上下文的新回合**开头**直接输出
-裸 `{"name":...}</tool_call>` 而漏掉 `<tool_call>` 开标签（151657 出现 0 次，stochastic，
-触发率 37%，round2+ 为主）——是模型采样行为，reasoning parser 无解。
+## Current Focus: Bug C 根治 + 8b-thinking × vLLM 全量重跑(2026-08-08)
 
-**修复**：`/workspace/vllm-src/vllm/parser/abstract_parser.py` `parse_delta` 检测
-"配 tools 的请求 + 流开头 + `{"`" → 重建 `<tool_call>` 开标签进 content 流。
-单元测试 15/15，冒烟 **10/10 PASS、swallowed 恒为 0**（修复前 2/4 FAIL）。
-方案 B 不需要。eval 侧 `_repair_swallowed_tool_calls` 保留作兜底。
-详见 `runs/2026-08-08_pi_8b_vllm_tool_call_bare_json_fix.md` + handoff（status: resolved）。
+**根因**：8b-thinking 在多轮工具上下文的新回合**开头**直接输出裸
+`{"name":...}</tool_call>` 而漏掉 `<tool_call>` 开标签（151657 出现 0 次，
+stochastic，触发率 37%）——是模型采样行为，reasoning parser 无解。
 
-**vLLM 状态**：tmux `vllm` 中 clean 版运行中（2026-08-08 00:08 启动，pid 3410825，
-envs/311，port 8001，健康，**含修复**，日志 `/tmp/vllm_launch_20260808_clean.log`）。
-`~/.pi/agent/models.json` baseUrl **已恢复 8001**（8002 捕获代理已停，备份
-`/tmp/models.json.bak`）。
+**修复**：vLLM serving 层 `parse_delta` 检测"配 tools 的请求 + 流开头 + `{"`" →
+重建 `<tool_call>` 开标签进 content 流。单元测试 15/15，冒烟 **10/10 PASS、
+swallowed 恒为 0**（修复前 2/4 FAIL）。eval 侧 `_repair_swallowed_tool_calls`
+保留作兜底。详见 `runs/2026-08-08_pi_8b_vllm_tool_call_bare_json_fix.md` +
+handoff（status: resolved）。
 
-**已完成**：全量 dev 403 重跑（任务 bijk3grx8，~4.2h）→ **51.4% (207/403)**，
-修复前 50.4% (203/403)，**+1.0pp**。吞工具样本（调用但未执行）**0**（修复前 ~14%），
-3590/3590 次工具调用全部真实执行，8 个 600s 超时（基线同类 6 个）。
-输出 `outputs/predictions/pi_agentic_qwen3-vl-8b-thinking_vllm_dev_fix.jsonl`
-（含 tool_trace/tool_results/tools_executed/tool_errors 轨迹字段）。
-run log: `runs/2026-08-08_pi_8b_vllm_full_dev_rerun_after_fix.md`。
+**vLLM 状态**：tmux `vllm` 中 clean 版运行中（pid 3410825，envs/311，port 8001，
+健康，**含修复**）。`~/.pi/agent/models.json` baseUrl 已恢复 8001。
 
-**工具轨迹落盘 + 执行校验（2026-08-08 完成）**：`eval_pi_agentic.py` 新增：
-- `tool_trace`：每次调用的 name + arguments（实际 bash command 全文）
-- `tool_results`：tool_execution_end 的 isError + content（read 图片以 data_bytes 计防爆量）
-- `tools_executed`：trace 中能匹配到执行结果的调用数（未匹配 = 被吞/未执行，Bug C 度量）
-- `tool_errors`：isError=true 的执行数
-校验工具 `/tmp/check_tool_execution.py`（按 toolCallId 配对）。验证：回放真实事件流
-11/11 执行 0 error；live 冒烟 4/4 执行 0 error。
+**全量 dev 403 重跑（修复后）→ 51.4% (207/403)**，修复前 50.4%，**+1.0pp**；
+吞工具样本（调用但未执行）**0**（修复前 ~14%），3590/3590 次调用全部真实执行，
+8 个 600s 超时（基线同类 6 个）。输出
+`outputs/predictions/pi_agentic_qwen3-vl-8b-thinking_vllm_dev_fix.jsonl`
+（含轨迹字段），run log: `runs/2026-08-08_pi_8b_vllm_full_dev_rerun_after_fix.md`。
 
-## Current Focus: pi Stage 2 × 本地 vLLM 8b-thinking
+**工具轨迹落盘 + 执行校验**：`eval_pi_agentic.py` 输出 `tool_trace`（name +
+arguments 即 bash command 全文）、`tool_results`（isError + content，read 图片
+以 data_bytes 计防爆量）、`tools_executed`（匹配到执行结果的调用数，Bug C 度量）、
+`tool_errors`。校验工具 `/tmp/check_tool_execution.py`（按 toolCallId 配对）。
+验证：回放真实事件流 11/11 执行 0 error；live 冒烟 4/4 执行 0 error。
 
-**Stage 2 接入本地 qwen3-vl-8b-thinking（vLLM, TP=8, port 8001）**：`agent/eval_pi_agentic.py` + provider `vllm-local`。
-冒烟通过（agent 用 bash/write 自主分析视频）。全量 dev 403 已完成
-（**50.4%, 203/403**，输出 `outputs/predictions/pi_agentic_qwen3-vl-8b-thinking_vllm_dev.jsonl`）。
-注意跑本地 vLLM 需 `VISTR_PI_PROVIDER=vllm-local VISTR_PI_MODEL=qwen3-vl-8b-thinking`（默认 amap-gateway）。
+**Stage 2 × 本地 vLLM 8b-thinking**：`eval_pi_agentic.py` + provider `vllm-local`
+（默认 amap-gateway，跑本地需 `VISTR_PI_PROVIDER=vllm-local
+VISTR_PI_MODEL=qwen3-vl-8b-thinking`）。vLLM 需 `--enable-auto-tool-choice
+--tool-call-parser hermes`；pi 累积式 args 补丁需重打：
+`/opt/conda/bin/python scripts/patch_pi_cumulative_args.py`。
 
-**关键改动**：
-- vLLM 需 `--enable-auto-tool-choice --tool-call-parser hermes`（Qwen3-VL 输出
-  `<tool_call>JSON</tool_call>` 格式，`hermes` parser 正则匹配；`qwen3_xml` 只认
-  `<function>/<parameter>` XML 不适用）——launcher/config 已支持
-- pi 累积式 args 补丁需重打：`/opt/conda/bin/python scripts/patch_pi_cumulative_args.py`
+**合并说明（2026-08-08）**：本文件由 tqh(Bug C 修复线) × main(观察原语线)合并，
+两线工作均已合入 tqh 分支，`eval_pi_agentic.py` 同时支持 JSON 轨迹落盘与
+extension 观察原语（`VISTR_PI_EXTENSION`）。
 
-## Current Focus: pi 作为新 harness
+pi (v0.84.0) 为 harness;通过 extension 逐步构建 task-agnostic 观察原语,
+**只改观察接口不教任务解法**,qwen3-vl-plus 在 90 题均匀子集上 50.0% → **56.7%**,
+首超 SpatialClaw(53.3%)。计划书: `plans/completed/0807-[pi作为harness]stage2.1-pi+多图阅读工具.md`,
+run log: `runs/2026-08-07_pi_observation_primitives.md`。
 
-SpatialClaw 判定过于死板,换用 pi (https://github.com/earendil-works/pi) 作为新 baseline harness。
+**观察原语四件套**(`agent/pi_ext/vistr_video_tools.ts`):
+- `read`(pi 原生)单帧 | `read_crop` normalized bbox 空间放大
+- `read_video_sequence` 连续时间片段 | `read_multiframe` 离散证据帧联查
+- `index_video` batch VLM caption 时间线(无题目上下文)
+- `semantic_crop` 文字描述 → GroundingDINO 定位 → 隔离 VLM 选候选 → 高清裁剪+回执
 
-**Stage 1 已完成 (2026-08-06)**: `agent/eval_pi.py`(抽 8 帧 → `pi -p` 带图问答)。
-全量 dev **54.6% (220/403)**。计划书: `plans/completed/0806-[pi作为harness]stage1-拉通.md`。
+**基础设施**: `scripts/perception_service.py` — 常驻 perception model-pool(:7876,
+GroundingDINO GPU 常驻 MI308X;可扩 SAM2/DA3/VGGT);启动:
+`nohup .../star/bin/python -u scripts/perception_service.py --port 7876 --eager &`
 
-**Stage 2 已完成 (2026-08-07)**: `agent/eval_pi_agentic.py` — pi 原生工具集,
-workspace + video.mp4,agent 自主 ffprobe/ffmpeg 抽帧 + read 看图(均 14.7 轮/题)。
-全量 dev **53.8% (217/403)**。关键修复: 网关流式 tool-call args 为累积式,
-补丁 `scripts/patch_pi_cumulative_args.py`(npm 重装后需重跑)。
-计划书: `plans/completed/0806-[pi作为harness]stage2-pi原生工具拉通.md`,
-run log: `runs/2026-08-06_pi_stage2_agentic_dev.md`。
+**评测约定**: 默认 `--per-task 6`(90 题);全量仅用户明确要求。
 
-**核心发现**: S1/S2 高度互补 — S2-only 对 69 题,S1-only 对 72 题,**union oracle 71.7%**。
-工具赢在关键瞬间类(Basketball +11pp),输在运动感知类(Relative_Velocity -28pp)。
+**其他资产**: Case viewer(Flask :7875,S1/S2/S2.1/S2.2 轨迹 tab 切换);
+opus S1 全量 57.1%;HF 轨迹数据集 MihailSlutsky/vistr-pi-trajectories。
 
-**Case Viewer**: `scripts/pi_case_viewer.py`(Flask, 7875 端口,代理友好)+
-`scripts/build_case_viewer.py`(数据包构建);S1/S2 对比 + Stage2 轨迹回放。
-
-**Next**: 混合路由(运动类走 S1,瞬间类走 S2)冲 60%+。
+**Next 候选**:
+1. 运动感知三弱项(Fall/RelVel/Vehicle 各 1/6):光流/跟踪后端进 model pool
+2. 观察策略融合(S2.x oracle 76.7%)
+3. opus + 全套原语
 
 ## Key Results Summary
 
 | Configuration | Accuracy | Samples |
 |---------------|----------|---------|
 | qwen3-vl-plus baseline | 50.6% | 403 |
-| **qwen3-vl-plus via pi (Stage 1, 无工具)** | **54.6%** | 403 |
+| qwen3-vl-plus via pi S1(纯问答) | 54.6% | 403 |
 | qwen3-vl-plus + V4 tools | 55.6% | 403 |
+| SpatialClaw | 56.6% | 403 |
+| claude-opus-4-6 via pi S1 | 57.1% | 403 |
+| **pi S2.4b(全套观察原语)** | **56.7%** | 90(均匀) |
 | qwen3-vl-8b-thinking baseline | 50.6% | 403 |
 | qwen3-vl-8b-thinking + V4 tools | 47.4% | 107 (partial) |
 | qwen3-vl-8b-thinking + pi agentic (修复后) | **51.4%** | 403 |
-| Best-of-both oracle (per-task) | 59.3% | 403 (estimated) |
+| qwen3-vl-8b-thinking + SpatialClaw | 48.0% | 150 (10/task 子集) |
 
 两模型互补：8b-thinking 擅长预测类 (Soccer +23pp, Golf +12pp)，plus 擅长空间感知 (Passage +19pp, Ego +18pp)。
 

@@ -114,11 +114,16 @@ def solve_pi(sample, timeout=300):
         cmd += [f"@{p}" for p in frames]
         cmd.append(prompt)
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True,
-                                  timeout=timeout, cwd=tmp)
-            if proc.returncode != 0:
-                raise RuntimeError(
-                    f"pi exit {proc.returncode}: {proc.stderr.strip()[:300]}")
+            last_err = None
+            for attempt in range(3):
+                proc = subprocess.run(cmd, capture_output=True, text=True,
+                                      timeout=timeout, cwd=tmp)
+                if proc.returncode == 0:
+                    break
+                last_err = f"pi exit {proc.returncode}: {proc.stderr.strip()[:300]}"
+                time.sleep(5 * (attempt + 1))
+            else:
+                raise RuntimeError(last_err)
             reasoning, final_answer, usage = _parse_pi_json(proc.stdout)
             answer = final_answer.strip("。.")
             pred = None
@@ -160,6 +165,7 @@ def main():
     parser.add_argument("--split", default="dev", choices=["dev", "eval", "all"])
     parser.add_argument("--tasks", type=str, default="")
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--per-task", type=int, default=None)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--output", type=str, default="")
     parser.add_argument("--timeout", type=int, default=300)
@@ -167,7 +173,7 @@ def main():
     args = parser.parse_args()
 
     tasks_filter = [t.strip() for t in args.tasks.split(",") if t.strip()] or None
-    samples = load_samples(args.split, tasks_filter, args.limit)
+    samples = load_samples(args.split, tasks_filter, args.limit, per_task=args.per_task)
     print(f"Harness: pi ({PI_BIN})")
     print(f"Model: {PROVIDER}/{MODEL}")
     print(f"Loaded {len(samples)} samples (split={args.split}, tasks={tasks_filter})")
@@ -179,13 +185,20 @@ def main():
 
     done_ids = set()
     if args.resume and os.path.exists(args.output):
+        kept = []
         with open(args.output) as f:
             for line in f:
                 try:
-                    done_ids.add(json.loads(line)["id"])
-                except (json.JSONDecodeError, KeyError):
-                    pass
-        print(f"Resuming: {len(done_ids)} already done")
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if r.get("src") == "error":
+                    continue
+                kept.append(line)
+                done_ids.add(r["id"])
+        with open(args.output, "w") as f:
+            f.writelines(kept)
+        print(f"Resuming: {len(done_ids)} done (error rows dropped for rerun)")
 
     remaining = [s for s in samples if s["id"] not in done_ids]
     print(f"Running {len(remaining)} samples")

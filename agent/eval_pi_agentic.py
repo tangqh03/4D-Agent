@@ -34,6 +34,7 @@ PI_BIN = os.path.join(PROJ_DIR, "third_party", "pi-runtime",
                       "node_modules", ".bin", "pi")
 PROVIDER = os.environ.get("VISTR_PI_PROVIDER", "amap-gateway")
 MODEL = os.environ.get("VISTR_PI_MODEL", "qwen3-vl-plus")
+EXTENSION = os.environ.get("VISTR_PI_EXTENSION", "")
 
 # Repo toolchain (see agent/tools/, eval_baseline.py): cv2 lives in the
 # /opt/conda python; ffmpeg/ffprobe come from a conda env that has them.
@@ -54,10 +55,9 @@ def agent_env():
 
 PROMPT = """你是视频时空推理专家。当前工作目录下有一个源视频 `video.mp4`（本目录可自由读写）。
 
-可用工具（都在 PATH 上，直接调用，禁止 `which`/`whereis`/`find /` 去找它们）：
-- bash：`ffprobe`/`ffmpeg` 查看时长帧率、按需抽帧、裁剪放大
-- bash：`/opt/conda/bin/python` 带 cv2/numpy，抽帧、光流、差分、裁剪放大、写分析脚本
-- read：直接查看图片文件（jpg/png），看抽出的帧
+可用手段：
+- bash 工具：`ffmpeg`/`ffprobe` 已装；`/opt/conda/bin/python` 带 cv2/numpy，可抽帧、算光流、差分、裁剪放大等
+- read 工具：可直接查看图片文件（jpg/png），看抽出的帧{extra_tools}
 
 任务：先用工具分析视频（建议先 ffprobe 看时长帧率，再抽关键帧查看；关键区域可裁剪放大），然后回答：
 
@@ -68,6 +68,13 @@ PROMPT = """你是视频时空推理专家。当前工作目录下有一个源�
 - 充分分析后再作答，但不要无限调用工具；一旦有足够证据就立即输出答案
 - 最后【必须】单独一行输出答案，格式：FINAL: <选项原文之一>
 - 不要把答案只写在思考里，FINAL 行是唯一评分依据"""
+
+EXTRA_TOOLS_NOTE = """
+- index_video 工具：获取视频的粗粒度带 caption 时间线（纯文本），用于发现值得看的时刻
+- read_video_sequence 工具：一次查看一个连续时间片段（多帧按时序排列）
+- read_multiframe 工具：一次联合查看若干已选定的证据时刻的帧
+- read_crop 工具：用归一化 bbox（0-1000）放大查看某帧/某图的局部区域（原始分辨率）
+- semantic_crop 工具：用英文文字描述目标（如 "the hand touching the tower"），由 grounding 后端定位并返回高清局部图+定位回执"""
 
 
 TOOL_CALL_RE = re.compile(
@@ -243,15 +250,26 @@ def solve_agentic(sample, timeout=600):
 
     with tempfile.TemporaryDirectory(prefix="pi_ws_") as ws:
         shutil.copy(video_path, os.path.join(ws, "video.mp4"))
-        prompt = PROMPT.format(question=question, options=" / ".join(options))
+        prompt = PROMPT.format(question=question, options=" / ".join(options),
+                               extra_tools=EXTRA_TOOLS_NOTE if EXTENSION else "")
         cmd = [PI_BIN, "-p", "--mode", "json",
-               "--provider", PROVIDER, "--model", MODEL, prompt]
+               "--provider", PROVIDER, "--model", MODEL]
+        if EXTENSION:
+            for ext in EXTENSION.split(","):
+                if ext.strip():
+                    cmd += ["-e", ext.strip()]
+        cmd.append(prompt)
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True,
-                                  timeout=timeout, cwd=ws, env=agent_env())
-            if proc.returncode != 0:
-                raise RuntimeError(
-                    f"pi exit {proc.returncode}: {proc.stderr.strip()[:300]}")
+            last_err = None
+            for attempt in range(3):
+                proc = subprocess.run(cmd, capture_output=True, text=True,
+                                      timeout=timeout, cwd=ws, env=agent_env())
+                if proc.returncode == 0:
+                    break
+                last_err = f"pi exit {proc.returncode}: {proc.stderr.strip()[:300]}"
+                time.sleep(5 * (attempt + 1))
+            else:
+                raise RuntimeError(last_err)
             (reasoning, final_text, usage, n_tool_calls,
              tool_calls, tool_results) = _parse_pi_json(proc.stdout)
             # Execution verification: only calls with a matching
@@ -265,7 +283,7 @@ def solve_agentic(sample, timeout=600):
                 "id": sample["id"], "task": sample["task"],
                 "gt": sample["answer"], "pred": pred,
                 "correct": pred == sample["answer"],
-                "src": "pi_agentic",
+                "src": "pi_agentic_ext" if EXTENSION else "pi_agentic",
                 "question": question, "options": options,
                 "video": sample.get("video", ""),
                 "dimension": sample.get("dimension", ""),
@@ -323,6 +341,7 @@ def main():
     parser.add_argument("--split", default="dev", choices=["dev", "eval", "all"])
     parser.add_argument("--tasks", type=str, default="")
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--per-task", type=int, default=None)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--output", type=str, default="")
     parser.add_argument("--timeout", type=int, default=600)
@@ -332,7 +351,7 @@ def main():
     args = parser.parse_args()
 
     tasks_filter = [t.strip() for t in args.tasks.split(",") if t.strip()] or None
-    samples = load_samples(args.split, tasks_filter, args.limit)
+    samples = load_samples(args.split, tasks_filter, args.limit, per_task=args.per_task)
     if args.ids:
         target = set(int(x) for x in args.ids.split(",") if x.strip())
         samples = [s for s in samples if s["id"] in target]
@@ -350,13 +369,20 @@ def main():
 
     done_ids = set()
     if args.resume and os.path.exists(args.output):
+        kept = []
         with open(args.output) as f:
             for line in f:
                 try:
-                    done_ids.add(json.loads(line)["id"])
-                except (json.JSONDecodeError, KeyError):
-                    pass
-        print(f"Resuming: {len(done_ids)} already done")
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if r.get("src") == "error":
+                    continue
+                kept.append(line)
+                done_ids.add(r["id"])
+        with open(args.output, "w") as f:
+            f.writelines(kept)
+        print(f"Resuming: {len(done_ids)} done (error rows dropped for rerun)")
 
     remaining = [s for s in samples if s["id"] not in done_ids]
     print(f"Running {len(remaining)} samples")
