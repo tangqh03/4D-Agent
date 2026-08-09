@@ -290,6 +290,45 @@ total of at least 40961 tokens. (parameter=input_tokens, value=8193)
   无 400，不能把该次错误归因于恢复逻辑。
 - `read_crop` 0-1 输入已有定向错误，#863 本次未再次发送该错误输入。
 
+## 4.5 closure checker 回复被 max_tokens=2048 截断(64k 修复运行,2026-08-09 发现)
+
+### 现象(#250 起报,viewer/JSONL 里 checker 回复句中截断)
+
+- #250(Basketball_Shot)的 submit_answer details.checker_reply 7258 字符,
+  尾部 "…PERCEPTION evidence. The"——句中硬切。非个例:运行前 37 次 checker
+  回复中 **35 次(95%)句中截断**。
+- 但 #250 的裁决不受影响:"CLOSURE: YES" 在**第 1367 字符**就已写出(裁决已捕获),
+  截断发生在裁决行之后的续写(模型写完 CLOSURE: YES 又写了 5879 字符
+  继续自说自话)。agent 正常收到 accepted、写出 FINAL: Yes(答对)。
+
+### 根因(evidence_closure.ts L357)
+
+- checker VLM subcall `max_tokens=2048`(S2.6 早期修复时设的防饿死预算),
+  8b 模型在 enable_thinking=false 下仍超话痨(单次回复 6.2-8.4K 字符 ≈
+  1800-2200 token)——**回复普遍顶到 2048 token 上限被 vLLM 长度截断**,
+  35/37 的回复未写完就没了。
+- 截断位置与裁决行的相对关系决定了危害:
+  - 裁决行在截断前(29/37)→ 正则已捕获 CLOSURE: YES/NO,截断只是尾部丑陋,无害;
+  - **裁决行未及写出即被截断(8/37 = 22%)→ 正则无匹配 → 落入 CLOSURE_NO 分支
+    (accepted=false, oneShotUsed=true) → 有效 claim 被误拒**,agent 被迫
+    重观察一轮。若重观察工具再出错(#863 坐标误用型),会话直接死,
+    连第二次提交都没有。
+- 8 个误拒标本:全部 Basketball_Shot、全部在 submit#2/#3(说明首轮后重提,
+  又被截断拒一轮)、回复 6.2-8.4K 字符全在裁决行前被切(#1/#750/#260/#762/
+  #765/#775/#783/#788/#813)。
+- **eval 侧审计 artifact**:JSONL 的 `closure.checker_reply` 只有 "We are given:"
+  (多行回复被 stdout 按行拆开,eval 只取 `checker reply:` 首行)——完整(仍
+  截断的)回复在 `tool_results[].details.checker_reply`。看 closure 字段会
+  误判"回复被截成一行",实际是 eval 解析 artifact。
+
+### 处理(待定)
+
+- 等用户命令。候选:checker max_tokens 2048 → 8192(或 4096);或改解析——
+  若回复未含 CLOSURE 行,视为"checker 截断"而非硬拒绝(区分 truncation 与
+  genuine NO,拒绝时不给 oneShotUsed 或提示重试 checker);或限制模型
+  回复长度(few-shot 强调只输出一行)。eval 侧 closure.checker_reply 改从
+  tool_results details 取(修复审计字段)。
+
 ## 5. viewer 思考块截断到 1000 字符(误读为"思考中断")[s26 观察]
 
 ### 现象

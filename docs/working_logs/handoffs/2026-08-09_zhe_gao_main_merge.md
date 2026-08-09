@@ -64,11 +64,12 @@ node agent/pi_ext/tests/run.mjs               # 可选:离线测试自检
 
 ## 已知限制/注意事项
 - vLLM 8b 路径只在本机验证过（GPU 0-7，含 `/workspace/vllm-src` 的 serving patch）；你如要跑 8b，需要**自己部署 vLLM + 重打 parse_delta 补丁**（补丁内容见 `docs/working_logs/runs/2026-08-08_pi_8b_vllm_tool_call_bare_json_fix.md`，不在仓库内）。
+- **新发现（未修复）**：closure checker 的 VLM subcall `max_tokens=2048` 对 8b 话痨回复普遍截断（35/37 截断，其中 8/37 在裁决行 CLOSURE: 写出前被切 → 有效 claim 被误拒一轮）。影响 64k dev403 全量运行，处理方案待定（候选：max_tokens 4096/8192、截断与 genuine NO 区分、few-shot 限制长度）。详见 `docs/notes/debug/tqh.md` §4.5。
 - `build_case_viewer.py` 默认 S1/S2 路径指向本机 8b/s26 输出（gitignored，不随仓库分发）；你用 plus 数据请设 `VISTR_BCV_S1/S2` 或直接用 `build_case_viewer_hf.py` 打 HF 包。
 - `docs/notes/debug/tqh.md` 是调试草稿（hypothesis），未经过评审，不视为结论。
 - 预测输出都在 `outputs/`（gitignored），不在仓库里；PR 不含任何评测结果数据。
 
 ## 关联材料
-- PR: #（合并后由 tqh 补填）
+- PR: https://github.com/HeShiLie/4D-Agent/pull/1（**tangqh03 只有 pull 权限，合并按钮在 HeShiLie/维护者侧**）
 - 运行日志: `docs/working_logs/runs/2026-08-08_s26_8b_gpu01_dev403.md`、`2026-08-09_s26_bugfix_64k_smoke.md`、`2026-08-08_pi_ext_tools_tests.md`、`2026-08-09_pi_trajectory_tool_audit.md`
 - 状态: `docs/working_logs/active.md`

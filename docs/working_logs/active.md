@@ -28,7 +28,11 @@ last_updated: 2026-08-09
 - 交接文档：`docs/working_logs/handoffs/2026-08-09_zhe_gao_main_merge.md`
   （zhe gao 环境与 main 一致、无需本地 vLLM；默认 amap-gateway 不变；
   合并 = 纯新增 + 小改，无 schema/API 变更）。
-- 合并 main + PR：见 PR #（合并后补填）。
+- 合并 main + PR：PR https://github.com/HeShiLie/4D-Agent/pull/1
+  （tangqh03 仅 pull 权限，需 HeShiLie 侧合并；已推 fork tangqh03/4D-Agent）。
+- **新发现（未修复）**：checker VLM subcall max_tokens=2048 对 8b 话痨回复
+  普遍截断（35/37，其中 8/37 在 CLOSURE 行前被切 → 有效 claim 误拒一轮），
+  影响 64k dev403 全量；处理待定（详见 notes/debug/tqh.md §4.5）。
 
 ## Current Focus: S2.6 × qwen3-vl-8b-thinking dev403 全量（2026-08-08，GPU 0/1 TP=2 本地 vLLM :8001）
 
