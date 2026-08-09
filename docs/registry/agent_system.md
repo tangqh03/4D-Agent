@@ -73,6 +73,7 @@ Reference material loaded on demand.
 | ID | Decision | Path |
 |----|----------|------|
 | `adr:tool-augmented-arch` | Agent 系统架构：工具增强 + 证据显式化 | `docs/adr/2026-07-31_tool_augmented_agent_architecture.md` |
+| `adr:s26-64k-commit` | S2.6 使用 64k 对齐窗口与 committed-answer 恢复 | `docs/adr/2026-08-09_s26_64k_context_and_committed_answer.md` |
 
 ## Usage in plans
 

@@ -123,5 +123,5 @@ VISTR_PI_PROVIDER=vllm-local VISTR_PI_MODEL=qwen3-vl-8b-thinking \
 |------|----------|
 | Stage 2 + qwen3-vl-plus (AMAP) | 53.8% (217/403) |
 | **Stage 2 + 8b-thinking (vLLM)** | **50.4% (203/403)** |
-| Baseline + 8b-thinking (vLLM) | 50.6% (192/403) |
+| Baseline + 8b-thinking (vLLM) | 47.6% (192/403, raw trace; recovery 后 54.3%) |
 | Stage 1 + 8b-thinking (vLLM) | 46.9% (189/403) |

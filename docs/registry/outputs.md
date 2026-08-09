@@ -1,7 +1,7 @@
 ---
 status: active
 scope: general
-last_verified: 2026-08-08
+last_verified: 2026-08-09
 owner: gaozhe
 ---
 
@@ -46,11 +46,11 @@ Index of all output directories and artifacts produced by this project.
 **Format**: JSONL，每行 `{id, task, gt, pred, correct, src, question, options, video, dimension, evidence, code, analysis_spec, elapsed_s, error}`
 **Notes**: qwen3-vl-plus, V4 action plan pipeline, 403 samples, 55.6%
 
-### 8b-thinking baseline
-**Path**: `outputs/predictions/baseline_8b_thinking.jsonl`
-**Produced by**: `agent/eval_baseline.py`
+### 8b-thinking baseline (vLLM)
+**Path**: `outputs/predictions/baseline_qwen3-vl-8b-thinking_vllm_dev_recovered_merged.jsonl`（raw trace 在 `baseline_qwen3-vl-8b-thinking_vllm_dev_trace.jsonl`）
+**Produced by**: `agent/eval_baseline.py`（本地 vLLM）
 **Format**: JSONL，每行 `{id, task, gt, pred, correct, src, question, options, raw_answer, elapsed_s, model}`
-**Notes**: qwen3-vl-8b-thinking, direct prompting, 403 samples, 50.6%
+**Notes**: qwen3-vl-8b-thinking, direct prompting, 403 samples, **54.3% (219/403, recovery 后)**；raw 4096-token trace 47.6%（53 样本截断无答案，recovery 重跑后 +27 对）。旧文件 `baseline_8b_thinking.jsonl`（08-03 实测 50.6%）已不在仓库，数字已被 08-07 recovery 版本取代。
 
 ### 8b-thinking V4 pipeline (partial)
 **Path**: `outputs/predictions/coding_agent_8b_thinking.jsonl`
@@ -104,3 +104,9 @@ Index of all output directories and artifacts produced by this project.
 **Produced by**: `agent/eval_pi_agentic.py` + `vistr_video_tools.ts` + `evidence_closure.ts`
 **Format**: 同 Stage 2,额外含 `closure` 字段（submit_calls, checker_reply）
 **Notes**: silent ledger + submit_answer + VLM closure checker; 相比 S2.4b +5.5pp; Interaction/Mikado/Passage/Jenga/Swimming/Soccer 提升最大(+16~17pp each)
+
+### pi S2.6 bugfix 64k 定向 smoke
+**Path**: `outputs/predictions/pi_s26_fix_smoke_ids_114_118_229_332_863_866_909_20260809.jsonl`
+**Produced by**: `agent/eval_pi_agentic.py --ids 118,229,332,866,909,863,114 --workers 1`
+**Format**: JSONL；含 `answer_source/no_answer/termination`、tool trace/result details 和 closure 字段
+**Notes**: 原 S2.6 失败题 7/7 完成，4/7 准确（非门禁），62/62 工具执行、0 tool error、0 provider error、0 null 崩溃、0 context 400；run log `docs/working_logs/runs/2026-08-09_s26_bugfix_64k_smoke.md`

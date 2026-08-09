@@ -86,10 +86,10 @@ Recovery 净效果接近 0（对答案无增益——模型 reasoning 已有答�
 
 - Stage 2 + qwen3-vl-plus (AMAP): 53.8% (217/403)
 - Stage 2 + 8b-thinking (vLLM): **50.4%** (203/403) ← 本次
-- Baseline + 8b-thinking (vLLM): 50.6% (192/403)
-- Stage 1 + 8b-thinking (vLLM): 46.9% (189/403)
-- Stage 1 + pi (8b-thinking): ~54.6%? (待确认，用 plus 跑的)
+- Baseline + 8b-thinking (vLLM): 47.6% (192/403, raw 4096-token trace；recovery 重跑截断样本后 54.3%)
+- Stage 1 + 8b-thinking (vLLM): 46.9% (189/403, raw trace；recovery 后 54.6%)
+- Stage 1 + pi (8b-thinking): 54.6% (220/403, recovery merged 已确认)
 
-**结论**：8b-thinking 工具模式 50.4%，基本持平 baseline（-0.2pp），比 S1 无工具高 3.5pp。
+**结论**：8b-thinking 工具模式 50.4%，高于 raw baseline 47.6%（+2.8pp），但低于截断修复后的公平 baseline 54.3%（-3.9pp）；比 S1 无工具（raw 46.9%）高 3.5pp。
 工具收益确认存在但受模型能力限制；plus 版比 8b 高 3.4pp（53.8% vs 50.4%）。
 已知间歇性问题：vLLM qwen3 reasoning_parser 偶尔吞 tool_call（~14% 样本），已有 recovery 处理。

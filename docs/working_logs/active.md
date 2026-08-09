@@ -1,9 +1,58 @@
 ---
 status: active
-last_updated: 2026-08-08
+last_updated: 2026-08-09
 ---
 
 # ViSTR-Agent — Active Work State
+
+## 已部署: S2.6 bugfix + GPU 0–3 / 64k 定向 smoke（2026-08-09）
+
+- 新配置 `configs/vllm_qwen3_vl_8b_thinking_gpu0-3_64k.json`:TP=4 GPU 0–3,
+  `max_model_len=65536`、`max_num_seqs=16`、mm cache 50GB、port 8001;
+  目标:修复 s26 无答案 127/403 的 400 死因(40960−32768=8192 输入预算 → 65536−32768=32768)。
+- 已修：null subcall、失败 index evidence、S2.6 accepted-submit 恢复、provider termination
+  诊断、`read_crop` 0-1/静态区域契约；closure 语义盲点暂缓。
+- 离线测试 93/93（Node）+21/21（Python）+ serving patch 6/6；原失败题
+  #114/#118/#229/#332/#863/#866/#909 smoke 7/7 完成，62/62 工具执行、0 tool error、
+  0 provider error、0 null 崩溃、0 context 400（准确率 4/7，不是门禁）。
+- 服务保留：`vllm-64k`（GPU 0–3/:8001）+ `perception-s26`（GPU 6/:7876）；
+  Claude Code 按 handoff 执行 dev403 全量，本 agent 不运行全量。
+- 详见 run log `docs/working_logs/runs/2026-08-09_s26_bugfix_64k_smoke.md` 和 handoff
+  `docs/working_logs/handoffs/2026-08-09_s26_bugfix_64k_dev403_claude.md`。
+
+## Current Focus: S2.6 × qwen3-vl-8b-thinking dev403 全量（2026-08-08，GPU 0/1 TP=2 本地 vLLM :8001）
+
+按交接文档执行：本地 vLLM qwen3-vl-8b-thinking（TP=2，GPU 0/1，port 8001，
+configs/vllm_qwen3_vl_8b_thinking_gpu01_s26.json）+ 本地 perception GroundingDINO-base
+（GPU 6，:7876，`GDINO_PATH` 环境变量覆盖指向本地 HF 缓存，lazy 模式，S2.6 设计一致）。
+
+**本次修复**（`agent/pi_ext/evidence_closure.ts`）：
+1. checker VLM 调用对 thinking 模型返回 `content=null`（思考耗尽预算）→ 旧代码
+   `null.trim()` TypeError → error_bypass 静默禁用 closure gate。修复：
+   `chat_template_kwargs.enable_thinking=false` + `max_tokens=2048` + null-safe `?? ""`。
+2. 8b 模型回复自由文本不按 `CLOSURE:` 格式 → 加 few-shot 示例 + 填空式结尾
+   （"CLOSURE: " 引导补全），实测 checker 输出 `CLOSURE: YES/NO` 行并可正确判
+   PERCEPTION/DERIVATION 覆盖。
+
+**验证进度**：回归 77/77（node）+ 16/16（python）通过；单样本 smoke（86s/67s/56s）
+无卡死，工具 7/7 与 4/4 真实执行 0 错误，closure 分支覆盖（confirmed / gap→
+re-observe→oneshot accept）；两题 smoke 通过；per-task 1（15 题）门禁通过
+（7/15=46.7%，工具 15/15 全绿，CHECKER_ERROR=0）。
+
+**✅ dev 403 全量已完成（2026-08-08 21:30 启动）**：
+**52.9% (213/403)**，对比参考 51.4% (207/403, 8b pi agentic 无 gate) **+1.5pp**；
+0 error / 0 超时（max 657s）；3304 次工具调用全部真实执行（tools_executed==
+tool_calls 403/403，tool_errors=0，salvaged=0）；submit 触发 335/403=83.1%
+（490 次调用）；closure 分支 CLOSURE_YES 185 / CLOSURE_NO 145 /
+ACCEPT_ONESHOT 117（gap 中 80.7% 回去 re-observe）/ ACCEPT_ALREADY 37 /
+GAP_NO_EVIDENCE 1 / GAP_DERIVATION_ONLY 1，**CHECKER_ERROR=0（无 error_bypass）**。
+输出 `outputs/predictions/pi_s26_qwen3-vl-8b-thinking_vllm_gpu01_dev403_20260808.jsonl`。
+详见 run log `runs/2026-08-08_s26_8b_gpu01_dev403.md`。
+
+**服务已停止（2026-08-09 07:0x）**：vLLM（pid 3390154，EXIT 0）与 perception
+（pid 3365315，EXIT 143）均已优雅 SIGTERM；GPU 0-7 全部回到 15 MiB 空闲基线，
+端口 8001/7876 已释放。复现需重新启动（配置在 `configs/vllm_qwen3_vl_8b_thinking_gpu01_s26.json`，
+perception 用 `GDINO_PATH` 指向本地 HF 缓存）。
 
 ## Current Focus: S2.6 Evidence Closure — answer-time visual verification
 
@@ -38,6 +87,14 @@ arguments 即 bash command 全文）、`tool_results`（isError + content，read
 `tool_errors`。校验工具 `/tmp/check_tool_execution.py`（按 toolCallId 配对）。
 验证：回放真实事件流 11/11 执行 0 error；live 冒烟 4/4 执行 0 error。
 
+**扩展工具测试套件（2026-08-08）**：`agent/pi_ext/tests/run.mjs`（76/76 passed：
+helpers 33 + ledger 7 + submit_answer 12 + video_tools 24，jiti 加载真实源码 +
+fetch 打桩 + ffmpeg 真实测试视频，零 LLM/GPU）+ `agent/tests/test_eval_pi_parse.py`
+（16/16）。已修复：失败/空观察误入 PERCEPTION ledger、crop 越界时间 provenance
+错误、反向时间片段、semantic_crop 缺 timestamp、重复 checker、连续 swallowed
+tool-call 丢轨迹，以及 `Clockwise`/`Counterclockwise` 选项误解析。详见
+`runs/2026-08-08_pi_ext_tools_tests.md`。两扩展文件保留行为中性的测试面导出。
+
 **Stage 2 × 本地 vLLM 8b-thinking**：`eval_pi_agentic.py` + provider `vllm-local`
 （默认 amap-gateway，跑本地需 `VISTR_PI_PROVIDER=vllm-local
 VISTR_PI_MODEL=qwen3-vl-8b-thinking`）。vLLM 需 `--enable-auto-tool-choice
@@ -68,10 +125,17 @@ GroundingDINO GPU 常驻 MI308X);启动:
 **评测约定**: 默认 `--per-task 6`(90 题);全量仅用户明确要求。
 
 **Next 候选**:
-1. S2.6 full-split eval (403 samples) 确认总体提升
-2. 改进 re-observation guidance (告诉 agent 具体看哪个时间段)
-3. 运动感知弱项(Fall/RelVel):光流/跟踪后端进 model pool
+1. ~~S2.6 full-split eval (403 samples) 确认总体提升~~ ✅ 52.9% (+1.5pp vs 51.4% 无 gate)
+2. 改进 re-observation guidance (告诉 agent 具体看哪个时间段；gap 后 28/145 未 re-observe)
+3. 运动感知弱项(Fall/RelVel):光流/跟踪后端进 model pool（8b 全量上 Passage 25% / RelVel 28% 最弱）
 4. opus + 全套原语 + closure
+
+**Claude Code 交接（2026-08-08）**：已生成
+`docs/working_logs/handoffs/2026-08-08_s26_gpu01_qwen3_vl_8b_dev403.md`，内容覆盖
+GPU 0/1、TP=2 的 vLLM 部署，现有 8 卡服务的安全切换门禁，主 agent 与 S2.6
+辅助 VLM 全部走 `vllm-local`，smoke → per-task 1 → dev 403 分阶段测试，结果完整性
+校验、失败恢复以及本轮 bug 修复清单。本 agent 只完成交接文档，没有启动服务或执行
+本次 GPU 评测；Claude Code 按文档执行并写 run log。
 
 ## Key Results Summary
 
@@ -85,9 +149,10 @@ GroundingDINO GPU 常驻 MI308X);启动:
 | pi S2.4b(全套观察原语) | 56.7% | 90(均匀) |
 | pi S2.5 evidence board(tail/anchor) | 54.4~56.7% | 90(均匀) |
 | **pi S2.6 evidence closure** | **62.2%** | 90(均匀) |
-| qwen3-vl-8b-thinking baseline | 50.6% | 403 |
+| qwen3-vl-8b-thinking baseline (vLLM, recovery) | 54.3% | 403 |
 | qwen3-vl-8b-thinking + V4 tools | 47.4% | 107 (partial) |
-| qwen3-vl-8b-thinking + pi agentic (修复后) | **51.4%** | 403 |
+| qwen3-vl-8b-thinking + pi agentic (修复后) | 51.4% | 403 |
+| **qwen3-vl-8b-thinking + S2.6 closure gate** | **52.9%** | 403 |
 | qwen3-vl-8b-thinking + SpatialClaw | 48.0% | 150 (10/task 子集) |
 
 两模型互补：8b-thinking 擅长预测类 (Soccer +23pp, Golf +12pp)，plus 擅长空间感知 (Passage +19pp, Ego +18pp)。
@@ -176,3 +241,39 @@ Per-task breakdown:
 - 不在 private held-out set 上调参
 - 未经确认不跑大规模 GPU 批量评测
 - API keys 只存 `agent/llm_keys.local.json`（chmod 600）
+
+## pi Case Viewer 部署(2026-08-09)
+
+- 启动:`/opt/conda/envs/spatialagent/bin/python -u scripts/pi_case_viewer.py --port 7875`(本机无 `python3.10.13` env,`/opt/conda/bin/python` 缺 flask;用 `spatialagent` env),后台运行,日志 `/tmp/pi_case_viewer.log`
+- 数据:`scripts/build_case_viewer.py`(S1/S2 路径改为 8B vllm dev 文件;S21–S24 文件缺失,自动跳过)
+- **两阶段轨迹匹配**(v2):阶段 1 用 **toolCall id 精确匹配**(vllm 每次调用 id 全局唯一,预测行 `tool_trace` 与 session 共享)→ **395/403 精确对应**,0 冲突(3590 个 id 全验证 question 一致);阶段 2 仅对 8 个 `src=error`(pi 退出,无 tool_trace)行做模板级兜底并前端标注(黄色警告条)
+- 覆盖:403/403 case 有轨迹回放(395 精确 + 8 模板级兜底);教训:ViSTR 题目文本模板化(403 id / 74 唯一文本),不能按文本匹配
+- Smoke test: 构建 `cases: 403 (403 with trajectory)`,API `/api/cases` `/api/case_detail` `/api/img` 均 200
+- 待办:下次重跑 eval 时给 pi session 注入视频标识(如 cwd 名→case id 映射),实现精确匹配
+- 轨迹工具审计:见 runs/2026-08-09_pi_trajectory_tool_audit.md(ffprobe 混用 3 次、专用视频工具 0 调用待核实扩展加载、虚构工具名 66 次)
+- viewer 双实例:7875 = s26 run(web/case_viewer/data);7877 = HF 下载的 qwen_pt6 轨迹包(outputs/hf_export/,manifest 精确匹配 403/403,build 用 VISTR_BCV_S1/S2/SESS/MANIFEST/OUT env,viewer 用 --data-dir;pi_case_viewer.py 新增 --data-dir,build_case_viewer.py 新增 manifest 模式)
+
+### HF 轨迹数据集回灌 + 独立 viewer(2026-08-09)
+
+- 下载 `MihailSlutsky/vistr-pi-trajectories`(qwen3-vl-plus 的 S1/S2 轨迹,公开无 gating)到
+  `outputs/hf_export/`:predictions_stage{1,2}.jsonl + stage{1,2}_trajectories.tar.gz(stage2 1.37GB,
+  内含 agent 看过的帧 base64)→ 解包 `outputs/hf_export/sessions/`(自包含,不动 `~/.pi/agent/sessions`)
+- 构建:`scripts/build_case_viewer_hf.py`(新增)——复用 build_case_viewer 辅助函数,但用 tar 内
+  **manifest.json 精确匹配**(上传的 stage2 predictions 无 tool_trace,无法 toolCall-id 匹配),
+  403/403 全部精确对应;输出同 schema 的 `web/case_viewer/data/`(8b 版备份在
+  `/tmp/case_viewer_data_8b_backup`)
+- viewer 起在 **7877**(7875 已被 8b viewer 占用,7876 留给 perception):`nohup spatialagent python -u scripts/pi_case_viewer.py --port 7877`
+- Smoke:API `/api/cases`(403) `/api/case_detail` `/api/img` `/api/video` 全 200
+
+### viewer 思考渲染(2026-08-09 追加)
+
+- `build_case_viewer.py::parse_session` 现保留 thinking 事件(`{"t":"think","text":前1000字符,"chars":全长}`,MAX_THINK=1000);`pi_case_viewer.py` + `web/case_viewer/index.html` 渲染为斜体蓝块 + "💭 思考 (N 字符)" 标签,轨迹统计行加"段思考"
+- 当前 `web/case_viewer/data/` 为 8b 版数据包(含思考,395/403 精确);7875/7877 均已重启加载。切回 plus 版: `spatialagent python scripts/build_case_viewer_hf.py` + 重启 viewer
+
+### viewer 切换 s26 数据包 + s26 工具崩溃审计(2026-08-09 追加)
+
+- 7875/7877 数据包切到 **s26**(dev403,403/403 toolCall-id 精确匹配;dev_fix+ext 版备份 `/tmp/case_viewer_data_devfix_backup`,116M)
+- `build_case_viewer.py` 各档路径支持 `VISTR_BCV_S1/S2/S21..S24` 环境变量覆盖,默认 S2 = s26 dev403;S21–24 预测文件已不在仓库,重建时自动跳过
+- 重启 7875/7877 后验证:1307 显示 s26 轨迹(pred=Left ✓),817 显示 s26 工具链(4×semantic_crop 崩溃)
+- **s26 工具崩溃**:index_video `null.trim` 241 次 + semantic_crop `null.match` 414 次(全量 session);dev403 中 **333/403 case(83%)** 含 ≥1 次崩溃(622 次)。根因:vistr_video_tools.ts 内 captionTimeline(L120)/selectCandidate(L167)对 gateway VLM 返回的 `content: null` 无空值保护——thinking 模型输出只有思考块时 content=null;selectCandidate 的 max_tokens=8 对 thinking 模型结构性饿死(qwen3 模板强制 `<think>` 前缀)。详见 notes/debug/tqh.md §4
+- closure gate:132 case 首次 submit 被拒后重试;盲点 = 不校验时间覆盖(#817 改写措辞即过)

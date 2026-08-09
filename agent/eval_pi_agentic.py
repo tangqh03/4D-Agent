@@ -87,13 +87,14 @@ TOOL_CALL_RE = re.compile(
 )
 # vLLM qwen3 reasoning_parser may consume the opening ``<tool_call>`` tag
 # as an implicit reasoning-end marker, leaving only JSON + ``</tool_call>``
-# inside the thinking block.  Match the remnant greedily — tool-call JSON
-# objects are nested (arguments is an inner object), so ``[^}]*`` cannot
-# span the full object; ``.*`` before ``</tool_call>`` does.
-SWALLOWED_TC_REM_RE = re.compile(
-    r"(\{[^{}]*\"name\"\s*:\s*\"(?:bash|read|write|edit|grep|find|ls)\".*\})\s*</tool_call>",
+# inside the thinking block.  The start matcher is paired with JSONDecoder
+# below so nested arguments and multiple remnant calls are handled without a
+# greedy regex crossing from one closing tag into the next.
+SWALLOWED_TC_START_RE = re.compile(
+    r"\{\s*\"name\"\s*:\s*\"[^\"]+\"",
     re.DOTALL,
 )
+TOOL_CALL_END = "</tool_call>"
 
 
 def _repair_swallowed_tool_calls(reasoning):
@@ -104,14 +105,38 @@ def _repair_swallowed_tool_calls(reasoning):
     # Full-form: <tool_call>JSON</tool_call>
     swallowed = TOOL_CALL_RE.findall(reasoning)
     repaired = TOOL_CALL_RE.sub("", reasoning)
-    # Remnant-form: JSON}</tool_call>  (opening tag consumed by parser)
-    for m in SWALLOWED_TC_REM_RE.finditer(repaired):
-        try:
-            json.loads(m.group(1))  # validate
-            swallowed.append(m.group(1))
-        except json.JSONDecodeError:
-            pass
-    repaired = SWALLOWED_TC_REM_RE.sub("", repaired)
+
+    # Remnant-form: JSON}</tool_call> (opening tag consumed by parser).
+    # Search one closing marker at a time.  A greedy regex can consume two
+    # adjacent calls as one invalid blob, losing both from the trace.
+    spans = []
+    search_from = 0
+    decoder = json.JSONDecoder()
+    while True:
+        close = repaired.find(TOOL_CALL_END, search_from)
+        if close < 0:
+            break
+        found = None
+        for m in SWALLOWED_TC_START_RE.finditer(repaired, search_from, close):
+            raw = repaired[m.start():close].strip()
+            try:
+                payload, consumed = decoder.raw_decode(raw)
+            except json.JSONDecodeError:
+                continue
+            if raw[consumed:].strip() or not isinstance(payload, dict) or not isinstance(payload.get("name"), str):
+                continue
+            found = (m.start(), close + len(TOOL_CALL_END), raw)
+            break
+        if found is None:
+            search_from = close + len(TOOL_CALL_END)
+            continue
+        start, end, raw = found
+        swallowed.append(raw)
+        spans.append((start, end))
+        search_from = end
+
+    for start, end in reversed(spans):
+        repaired = repaired[:start] + repaired[end:]
     return repaired, swallowed
 
 
@@ -132,7 +157,10 @@ def _parse_pi_json(stdout):
     usage = {}
     n_tool_calls = 0
     tool_calls = []      # {id, name, arguments} from assistant toolCall blocks
-    tool_results = []    # {toolCallId, name, isError, content} from tool_execution_end
+    tool_results = []    # {toolCallId, name, isError, content, details} from tool_execution_end
+    stop_reason = "unknown"
+    provider_error_count = 0
+    last_provider_error = None
 
     for line in stdout.splitlines():
         try:
@@ -152,6 +180,15 @@ def _parse_pi_json(stdout):
             message = event.get("message", {})
             role = message.get("role") if isinstance(message, dict) else None
             blocks = message.get("content", []) if isinstance(message, dict) else []
+            if role == "assistant":
+                reason = message.get("stopReason")
+                if isinstance(reason, str) and reason:
+                    stop_reason = reason
+                if reason == "error":
+                    provider_error_count += 1
+                    error_message = message.get("errorMessage")
+                    if error_message:
+                        last_provider_error = str(error_message)[:1000]
             for block in blocks:
                 if isinstance(block, dict):
                     bt = block.get("type")
@@ -160,13 +197,13 @@ def _parse_pi_json(stdout):
                             thinking_blocks.append(block.get("thinking", ""))
                         elif bt == "text":
                             text_blocks.append(block.get("text", ""))
-                    if bt == "toolCall":
-                        n_tool_calls += 1
-                        tool_calls.append({
-                            "id": block.get("id", ""),
-                            "name": block.get("name", ""),
-                            "arguments": block.get("arguments", {}),
-                        })
+                        if bt == "toolCall":
+                            n_tool_calls += 1
+                            tool_calls.append({
+                                "id": block.get("id", ""),
+                                "name": block.get("name", ""),
+                                "arguments": block.get("arguments", {}),
+                            })
             if event.get("usage"):
                 usage = event.get("usage")
         elif event_type == "tool_execution_end":
@@ -185,13 +222,32 @@ def _parse_pi_json(stdout):
                 "name": event.get("toolName", ""),
                 "isError": bool(result.get("isError", False)),
                 "content": content,
+                "details": result.get("details") if isinstance(result.get("details"), dict) else {},
             })
 
     # Full reasoning = all thinking blocks across every assistant round.
     reasoning = "".join(thinking_blocks) if thinking_blocks else "".join(thinking_deltas)
     # Repair: salvage tool_calls swallowed into thinking by vLLM reasoning_parser.
     reasoning, swallowed_tcs = _repair_swallowed_tool_calls(reasoning)
-    n_tool_calls += len(swallowed_tcs)
+    for raw in swallowed_tcs:
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict) or not isinstance(payload.get("name"), str):
+            continue
+        arguments = payload.get("arguments")
+        if not isinstance(arguments, dict):
+            arguments = {k: v for k, v in payload.items() if k != "name"}
+        tool_calls.append({
+            # The model's swallowed form has no pi tool-call id.  Preserve
+            # it in the trace with an explicit synthetic id; it must not be
+            # counted as executed unless a real matching result exists.
+            "id": f"salvaged-{len(tool_calls) + 1}",
+            "name": payload["name"],
+            "arguments": arguments,
+        })
+        n_tool_calls += 1
     # Final answer = last non-empty assistant text block (fall back to deltas).
     final_text = ""
     for t in text_blocks:
@@ -199,8 +255,13 @@ def _parse_pi_json(stdout):
             final_text = t
     if not final_text:
         final_text = "".join(text_deltas)
+    termination = {
+        "stop_reason": stop_reason,
+        "provider_error_count": provider_error_count,
+        "last_error": last_provider_error,
+    }
     return (reasoning.strip(), final_text.strip(), usage, n_tool_calls,
-            tool_calls, tool_results)
+            tool_calls, tool_results, termination)
 
 
 def extract_answer(final_text, reasoning, options):
@@ -213,10 +274,38 @@ def extract_answer(final_text, reasoning, options):
         cand = cand.strip().strip("。.**`\"'，, \n\t")
         if not cand:
             return None
+        # Prefer an exact option before substring fallback.  This matters for
+        # the public split's Clockwise/Counterclockwise pair.
         for o in options:
-            if o.lower() == cand.lower() or o.lower() in cand.lower():
+            if o.casefold() == cand.casefold():
                 return o
+        matches = [o for o in options if o.casefold() in cand.casefold()]
+        if matches:
+            return max(matches, key=len)
         return cand
+
+    def _last_option_mention(text):
+        low = text.casefold()
+        mentions = []
+        for o in options:
+            needle = o.casefold()
+            start = 0
+            while True:
+                i = low.find(needle, start)
+                if i < 0:
+                    break
+                mentions.append((i, i + len(needle), o))
+                start = i + 1
+        # Do not let a shorter option win merely because it occurs inside a
+        # longer option (e.g. Clockwise inside Counterclockwise).
+        mentions = [m for m in mentions if not any(
+            other[2] != m[2] and len(other[2]) > len(m[2]) and
+            other[0] <= m[0] and other[1] >= m[1]
+            for other in mentions
+        )]
+        if not mentions:
+            return None
+        return max(mentions, key=lambda m: (m[0], len(m[2])))[2]
 
     if final_text:
         for line in reversed(final_text.splitlines()):
@@ -226,25 +315,58 @@ def extract_answer(final_text, reasoning, options):
                 r = _match(m.group(1))
                 if r:
                     return r
-        low = final_text.lower()
-        best = None
-        for o in options:
-            i = low.rfind(o.lower())
-            if i != -1 and (best is None or i > best[1]):
-                best = (o, i)
-        if best:
-            return best[0]
+        mentioned = _last_option_mention(final_text)
+        if mentioned:
+            return mentioned
 
     if reasoning:
-        low = reasoning.lower()
-        best = None
-        for o in options:
-            i = low.rfind(o.lower())
-            if i != -1 and (best is None or i > best[1]):
-                best = (o, i)
-        if best:
-            return best[0]
+        mentioned = _last_option_mention(reasoning)
+        if mentioned:
+            return mentioned
     return None
+
+
+def _select_answer(final_text, reasoning, options, tool_calls, tool_results,
+                   has_submit):
+    """Select an answer without mistaking deliberation for an S2.6 commit.
+
+    S2.6 requires an explicit final line or a successful submit_answer result.
+    Other stages retain the historical final-text/reasoning fallback.
+    """
+    if has_submit:
+        for line in reversed(final_text.splitlines()):
+            if not re.match(r"\s*(?:FINAL|答案|answer)[:：]", line, re.IGNORECASE):
+                continue
+            pred = extract_answer(line, "", options)
+            if pred in options:
+                return pred, "final"
+
+        calls_by_id = {call.get("id"): call for call in tool_calls if call.get("id")}
+        committed = None
+        for result in tool_results:
+            if result.get("isError") or result.get("details", {}).get("accepted") is not True:
+                continue
+            call = calls_by_id.get(result.get("toolCallId"))
+            if not call or call.get("name") != "submit_answer":
+                continue
+            answer = call.get("arguments", {}).get("answer")
+            if not isinstance(answer, str):
+                continue
+            cleaned = answer.strip().strip("。.**`\"'，, \n\t")
+            option = next((o for o in options if o.casefold() == cleaned.casefold()), None)
+            if option is not None:
+                committed = option
+        if committed is not None:
+            return committed, "accepted_submit"
+        return None, "none"
+
+    pred_from_final = extract_answer(final_text, "", options)
+    if pred_from_final in options:
+        return pred_from_final, "final"
+    pred = extract_answer("", reasoning, options)
+    if pred in options:
+        return pred, "reasoning_fallback"
+    return None, "none"
 
 
 def solve_agentic(sample, timeout=600):
@@ -285,14 +407,15 @@ def solve_agentic(sample, timeout=600):
             else:
                 raise RuntimeError(last_err)
             (reasoning, final_text, usage, n_tool_calls,
-             tool_calls, tool_results) = _parse_pi_json(proc.stdout)
+             tool_calls, tool_results, termination) = _parse_pi_json(proc.stdout)
             # Execution verification: only calls with a matching
             # tool_execution_end were actually run by pi.  A call with no
             # matching result was swallowed (pre-fix Bug C) or abandoned.
             executed_ids = {r["toolCallId"] for r in tool_results if r["toolCallId"]}
             tools_executed = sum(1 for c in tool_calls if c["id"] in executed_ids)
             tool_errors = sum(1 for r in tool_results if r["isError"])
-            pred = extract_answer(final_text, reasoning, options)
+            pred, answer_source = _select_answer(
+                final_text, reasoning, options, tool_calls, tool_results, has_submit)
             closure_info = {}
             if has_submit:
                 for line in (proc.stderr or "").split("\n"):
@@ -304,6 +427,9 @@ def solve_agentic(sample, timeout=600):
                 "id": sample["id"], "task": sample["task"],
                 "gt": sample["answer"], "pred": pred,
                 "correct": pred == sample["answer"],
+                "answer_source": answer_source,
+                "no_answer": pred is None,
+                "termination": termination,
                 "src": "pi_agentic_ext" if EXTENSION else "pi_agentic",
                 "question": question, "options": options,
                 "video": sample.get("video", ""),
@@ -326,6 +452,11 @@ def solve_agentic(sample, timeout=600):
                 "id": sample["id"], "task": sample["task"],
                 "gt": sample["answer"], "pred": None,
                 "correct": False, "src": "error",
+                "answer_source": "none", "no_answer": True,
+                "termination": {
+                    "stop_reason": "unknown", "provider_error_count": 0,
+                    "last_error": None,
+                },
                 "question": question, "options": options,
                 "reasoning": "", "final_answer": "",
                 "raw_answer": "", "usage": {}, "tool_calls": 0,

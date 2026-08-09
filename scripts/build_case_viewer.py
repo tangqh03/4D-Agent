@@ -9,11 +9,19 @@ Usage:
   /opt/conda/bin/python scripts/build_case_viewer.py
   cd <project root> && python3 -m http.server 8765
   open http://<host>:8765/web/case_viewer/
+
+Stage prediction paths are overridable via env vars (defaults = current
+S2.6 pipeline; use these to build bundles for other runs without editing
+the file):
+  VISTR_BCV_S1   baseline JSONL
+  VISTR_BCV_S2   S2/S2.6 agentic JSONL (default: s26 dev403)
+  VISTR_BCV_S21..S24  ext-run JSONLs (empty to skip a stage)
 """
 from __future__ import annotations
 
 import base64
 import glob
+import hashlib
 import io
 import json
 import os
@@ -22,23 +30,46 @@ import cv2
 import numpy as np
 
 PROJ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-S1_PATH = os.path.join(PROJ, "outputs", "predictions",
-                       "pi_qwen3-vl-plus_dev_20260806.jsonl")
-S2_PATH = os.path.join(PROJ, "outputs", "predictions",
-                       "pi_agentic_qwen3-vl-plus_dev_20260806.jsonl")
-S21_PATH = os.path.join(PROJ, "outputs", "predictions",
-                        "pi_agentic_ext_qwen_pt6_20260807.jsonl")
-S22_PATH = os.path.join(PROJ, "outputs", "predictions",
-                        "pi_agentic_ext2_qwen_pt6_20260807.jsonl")
-S23_PATH = os.path.join(PROJ, "outputs", "predictions",
-                        "pi_agentic_ext3_qwen_pt6_20260807.jsonl")
-S24_PATH = os.path.join(PROJ, "outputs", "predictions",
-                        "pi_agentic_ext4b_qwen_pt6_20260807.jsonl")
-SESS_GLOB = os.path.expanduser("~/.pi/agent/sessions/--tmp-pi_ws_*/*.jsonl")
-OUT_DIR = os.path.join(PROJ, "web", "case_viewer", "data")
+
+
+def _env_path(key, default):
+    """Stage path override (VISTR_BCV_S* env vars); empty string = skip."""
+    v = os.environ.get(key)
+    return v if v is not None else default
+
+
+S1_PATH = _env_path("VISTR_BCV_S1", os.path.join(
+    PROJ, "outputs", "predictions",
+    "baseline_qwen3-vl-8b-thinking_vllm_dev_recovered_merged.jsonl"))
+S2_PATH = _env_path("VISTR_BCV_S2", os.path.join(
+    PROJ, "outputs", "predictions",
+    "pi_s26_qwen3-vl-8b-thinking_vllm_gpu01_dev403_20260808.jsonl"))
+S21_PATH = _env_path("VISTR_BCV_S21", os.path.join(
+    PROJ, "outputs", "predictions",
+    "pi_agentic_ext_qwen_pt6_20260807.jsonl"))
+S22_PATH = _env_path("VISTR_BCV_S22", os.path.join(
+    PROJ, "outputs", "predictions",
+    "pi_agentic_ext2_qwen_pt6_20260807.jsonl"))
+S23_PATH = _env_path("VISTR_BCV_S23", os.path.join(
+    PROJ, "outputs", "predictions",
+    "pi_agentic_ext3_qwen_pt6_20260807.jsonl"))
+S24_PATH = _env_path("VISTR_BCV_S24", os.path.join(
+    PROJ, "outputs", "predictions",
+    "pi_agentic_ext4b_qwen_pt6_20260807.jsonl"))
+# session 根目录(支持 HF 下载包的 sessions/ 目录;默认本机 pi session 库)。
+SESS_ROOT = _env_path("VISTR_BCV_SESS", os.path.expanduser("~/.pi/agent/sessions"))
+SESS_GLOB = os.path.join(SESS_ROOT, "--tmp-pi_ws_*", "*.jsonl")
+# HF 包 manifest.json(路径时用其 id->session 映射做精确匹配,如 hf_export/sessions/manifest.json)。
+MANIFEST_PATH = _env_path("VISTR_BCV_MANIFEST", "")
+# 输出目录(多 viewer 实例并存时指向各自目录,如 web/case_viewer/data_pt6)。
+OUT_DIR = _env_path("VISTR_BCV_OUT", os.path.join(PROJ, "web", "case_viewer", "data"))
 IMG_W = 640
 JPEG_Q = 70
 MAX_TEXT = 1500
+# 思考块(thinking part)不截断——全文进 cases.json。
+# (历史:MAX_THINK=1000 词中硬切,viewer 误读为"思考中断",#9 思考 1198 字符被切成 1000;
+# 用户明确:不要上限,调试必须能看完整思考。chars 字段保留原始长度作标注。)
+MAX_THINK = None
 
 
 def load_jsonl(path):
@@ -65,11 +96,13 @@ def shrink_image(b64data):
 
 
 def parse_session(path):
-    """Return (question, final_text, events). Events reference images by index."""
+    """Return (question, final_text, events, images, tool_call_ids).
+    Events reference images by index."""
     question = None
     final_text = ""
     events = []
     images = []
+    call_ids = []
     for line in open(path):
         try:
             e = json.loads(line)
@@ -95,48 +128,103 @@ def parse_session(path):
                     events.append({"t": "text", "text": txt[:MAX_TEXT]})
                 elif role == "toolResult":
                     events.append({"t": "result", "text": txt[:600]})
+            elif pt == "thinking":
+                t = p.get("thinking") or ""
+                events.append({"t": "think", "text": t if MAX_THINK is None else t[:MAX_THINK],
+                               "chars": len(t)})
             elif pt == "toolCall" and role == "assistant":
                 events.append({"t": "tool", "name": p.get("name", ""),
                                "args": json.dumps(p.get("arguments", {}),
                                                   ensure_ascii=False)[:500]})
+                if p.get("id"):
+                    call_ids.append(p["id"])
             elif pt == "image":
                 images.append(p.get("data", ""))
                 events.append({"t": "img", "idx": len(images) - 1})
-    return question, final_text, events, images
+    return question, final_text, events, images, call_ids
 
 
 def match_sessions(pred_rows, sess_files):
-    by_question = {}
+    """Two-stage trajectory matching.
+
+    Stage 1 (exact): match a session to a prediction row by toolCall ids.
+    vLLM tool-call ids (chatcmpl-tool-*) are unique per call, and prediction
+    rows persist the executed subset in tool_trace, so the session for a
+    video is uniquely identifiable even though ViSTR question texts are
+    templated (403 ids vs 74 unique texts) and sessions carry no video
+    path (video is always copied to video.mp4, workspace deleted after run).
+
+    Stage 2 (template fallback): rows with no tool trace (src=error runs
+    where pi exited before any tool call) get the question template's
+    trajectory; the caller flags those in traj_shared/traj_videos.
+    """
+    by_id = {r["id"]: r for r in pred_rows}
+    tid2row = {}                       # toolCall id -> row ids
     for r in pred_rows:
-        by_question.setdefault(r["question"].strip(), []).append(r)
-    matched = {}
+        for t in r.get("tool_trace") or []:
+            tid2row.setdefault(t["id"], set()).add(r["id"])
+    templates = {r["question"].strip() for r in pred_rows}
+    exact = {}     # row id -> (events, images)
+    tpl = {}       # question -> (events, images); later sessions win
+    counts = {}    # question -> matched session count
     for sf in sess_files:
         try:
-            question, final_text, events, images = parse_session(sf)
+            question, final_text, events, images, call_ids = parse_session(sf)
         except Exception:
             continue
         if not question or not events:
             continue
-        row = None
-        for r in by_question.get(question, []):
-            tail = (r.get("raw_answer") or "")[-200:]
-            if tail and tail in final_text[-1000:]:
-                row = r
+        counts[question] = counts.get(question, 0) + 1
+        row_id = None
+        for tid in call_ids:
+            rows = tid2row.get(tid)
+            if rows and len(rows) == 1:
+                row_id = next(iter(rows))
                 break
-        if row is None and len(by_question.get(question, [])) == 1:
-            row = by_question[question][0]
-        if row is None:
+        if row_id is not None:
+            exact[row_id] = (events, images)
+        elif question in templates:
+            tpl[question] = (events, images)
+    return exact, tpl, counts
+
+
+def match_manifest(manifest_path, sess_root):
+    """Exact matching via an HF package manifest (id -> session path).
+
+    Used when VISTR_BCV_MANIFEST points at e.g. hf_export/sessions/manifest.json:
+    the package ships its own authoritative id->session mapping (403 ids,
+    unique sessions), which the local toolCall-id stage cannot reconstruct
+    because the uploaded predictions are stripped of tool_trace.
+    """
+    man = json.load(open(manifest_path))
+    exact = {}     # row id -> (events, images)
+    counts = {}    # question -> matched session count
+    for str_id, info in man.items():
+        try:
+            rid = int(str_id)
+        except ValueError:
             continue
-        # later sessions win (reruns overwrite smoke attempts)
-        matched[row["id"]] = (events, images)
-    return matched
+        sf = os.path.join(sess_root, info["session"])
+        if not os.path.exists(sf):
+            continue
+        try:
+            question, final_text, events, images, call_ids = parse_session(sf)
+        except Exception:
+            continue
+        if not question or not events:
+            continue
+        exact[rid] = (events, images)
+        counts[question] = counts.get(question, 0) + 1
+    return exact, counts
 
 
-def save_traj(cid, matched, subdir):
-    if cid not in matched:
+def save_traj(key, matched, subdir, dirname):
+    """Dump a matched trajectory's viewed frames; `dirname` is the image
+    sub-directory (row id for exact matches, tpl_<hash> for fallbacks)."""
+    if key not in matched:
         return []
-    events, images = matched[cid]
-    img_dir = os.path.join(OUT_DIR, subdir, str(cid))
+    events, images = matched[key]
+    img_dir = os.path.join(OUT_DIR, subdir, dirname)
     saved = {}
     traj = []
     for ev in events:
@@ -151,7 +239,7 @@ def save_traj(cid, matched, subdir):
                 fn = f"{idx:02d}.jpg"
                 with open(os.path.join(img_dir, fn), "wb") as f:
                     f.write(data)
-                saved[idx] = f"{subdir}/{cid}/{fn}"
+                saved[idx] = f"{subdir}/{dirname}/{fn}"
             ev["src"] = saved[idx]
         traj.append(ev)
     return traj
@@ -159,8 +247,14 @@ def save_traj(cid, matched, subdir):
 
 def main():
     os.makedirs(os.path.join(OUT_DIR, "images"), exist_ok=True)
-    s1 = {r["id"]: r for r in load_jsonl(S1_PATH)}
-    s2rows = load_jsonl(S2_PATH)
+    # S1/S2 同 S21-24:预测文件缺失时跳过(默认路径指向 8b/s26 本地输出,
+    # 不在仓库内;其他环境用 VISTR_BCV_S* 覆盖指向自己的文件)。
+    s1 = {}
+    if os.path.exists(S1_PATH):
+        s1 = {r["id"]: r for r in load_jsonl(S1_PATH)}
+    s2rows = []
+    if os.path.exists(S2_PATH):
+        s2rows = load_jsonl(S2_PATH)
     s21 = {}
     if os.path.exists(S21_PATH):
         s21 = {r["id"]: r for r in load_jsonl(S21_PATH)}
@@ -176,21 +270,45 @@ def main():
 
     sess_files = sorted(glob.glob(SESS_GLOB), key=os.path.getmtime)
     print(f"sessions: {len(sess_files)}")
-    matched = match_sessions(s2rows, sess_files)
-    print(f"S2 matched trajectories: {len(matched)}/{len(s2rows)}")
-    matched21 = match_sessions(list(s21.values()), sess_files) if s21 else {}
-    print(f"S2.1 matched trajectories: {len(matched21)}/{len(s21)}")
-    matched22 = match_sessions(list(s22.values()), sess_files) if s22 else {}
-    print(f"S2.2 matched trajectories: {len(matched22)}/{len(s22)}")
-    matched23 = match_sessions(list(s23.values()), sess_files) if s23 else {}
-    print(f"S2.3 matched trajectories: {len(matched23)}/{len(s23)}")
-    matched24 = match_sessions(list(s24.values()), sess_files) if s24 else {}
-    print(f"S2.4b matched trajectories: {len(matched24)}/{len(s24)}")
+    if MANIFEST_PATH and os.path.exists(MANIFEST_PATH):
+        exact, counts = match_manifest(MANIFEST_PATH, SESS_ROOT)
+        # Manifest 覆盖不到的 id 再用模板级兜底(不应发生,403 全量唯一映射)。
+        missing = [r for r in s2rows if r["id"] not in exact]
+        _, tpl, _ = match_sessions(missing, sess_files) if missing else ({}, {}, {})
+        print(f"S2 exact (manifest): {len(exact)} rows, "
+              f"fallback: {len(tpl)} templates, {sum(counts.values())} sessions")
+    else:
+        exact, tpl, counts = match_sessions(s2rows, sess_files)
+        print(f"S2 exact (toolCall-id): {len(exact)} rows, "
+              f"template fallback: {len(tpl)} templates, "
+              f"{sum(counts.values())} sessions total")
+    exact21, tpl21, _ = match_sessions(list(s21.values()), sess_files) if s21 else ({}, {}, {})
+    print(f"S2.1 exact: {len(exact21)} rows, fallback: {len(tpl21)}")
+    exact22, tpl22, _ = match_sessions(list(s22.values()), sess_files) if s22 else ({}, {}, {})
+    print(f"S2.2 exact: {len(exact22)} rows, fallback: {len(tpl22)}")
+    exact23, tpl23, _ = match_sessions(list(s23.values()), sess_files) if s23 else ({}, {}, {})
+    print(f"S2.3 exact: {len(exact23)} rows, fallback: {len(tpl23)}")
+    exact24, tpl24, _ = match_sessions(list(s24.values()), sess_files) if s24 else ({}, {}, {})
+    print(f"S2.4b exact: {len(exact24)} rows, fallback: {len(tpl24)}")
+
+    # How many videos share each question template (for honest labeling).
+    from collections import Counter
+    tpl_videos = Counter(r["question"].strip() for r in s2rows)
 
     cases = []
     for r in sorted(s2rows, key=lambda x: (x["task"], x["id"])):
         cid = r["id"]
-        traj = save_traj(cid, matched, "images")
+        qkey = r["question"].strip()
+        if cid in exact:
+            traj = save_traj(cid, exact, "images", str(cid))
+            shared, n_sessions = False, 0
+        elif qkey in tpl:
+            dirname = "tpl_" + hashlib.md5(qkey.encode()).hexdigest()[:10]
+            traj = save_traj(qkey, tpl, "images", dirname)
+            shared, n_sessions = True, counts.get(qkey, 0)
+        else:
+            traj = []
+            shared, n_sessions = False, 0
         s1r = s1.get(cid, {})
         cases.append({
             "id": cid, "task": r["task"], "dimension": r.get("dimension", ""),
@@ -202,23 +320,41 @@ def main():
                    "raw": (r.get("raw_answer") or "")[-500:],
                    "elapsed": round(r.get("elapsed_s", 0))},
             "traj": traj,
+            # Exact match (toolCall-id) => traj_shared False.  Template
+            # fallback (only for rows without tool trace) => flagged so the
+            # frontend labels the trajectory as template-level.
+            "traj_shared": shared,
+            "traj_videos": tpl_videos[qkey],
+            "traj_sessions": n_sessions or counts.get(qkey, 0),
             "s21": ({"pred": s21[cid].get("pred"), "correct": s21[cid].get("correct"),
                      "raw": (s21[cid].get("raw_answer") or "")[-500:],
                      "elapsed": round(s21[cid].get("elapsed_s", 0))}
                     if cid in s21 else None),
-            "traj21": save_traj(cid, matched21, "images21"),
+            "traj21": (save_traj(cid, exact21, "images21", str(cid))
+                       if cid in exact21 else
+                       save_traj(qkey, tpl21, "images21",
+                                 "tpl_" + hashlib.md5(qkey.encode()).hexdigest()[:10])),
             "s22": ({"pred": s22[cid].get("pred"), "correct": s22[cid].get("correct"),
                      "elapsed": round(s22[cid].get("elapsed_s", 0))}
                     if cid in s22 else None),
-            "traj22": save_traj(cid, matched22, "images22"),
+            "traj22": (save_traj(cid, exact22, "images22", str(cid))
+                       if cid in exact22 else
+                       save_traj(qkey, tpl22, "images22",
+                                 "tpl_" + hashlib.md5(qkey.encode()).hexdigest()[:10])),
             "s23": ({"pred": s23[cid].get("pred"), "correct": s23[cid].get("correct"),
                      "elapsed": round(s23[cid].get("elapsed_s", 0))}
                     if cid in s23 else None),
-            "traj23": save_traj(cid, matched23, "images23"),
+            "traj23": (save_traj(cid, exact23, "images23", str(cid))
+                       if cid in exact23 else
+                       save_traj(qkey, tpl23, "images23",
+                                 "tpl_" + hashlib.md5(qkey.encode()).hexdigest()[:10])),
             "s24": ({"pred": s24[cid].get("pred"), "correct": s24[cid].get("correct"),
                      "elapsed": round(s24[cid].get("elapsed_s", 0))}
                     if cid in s24 else None),
-            "traj24": save_traj(cid, matched24, "images24"),
+            "traj24": (save_traj(cid, exact24, "images24", str(cid))
+                       if cid in exact24 else
+                       save_traj(qkey, tpl24, "images24",
+                                 "tpl_" + hashlib.md5(qkey.encode()).hexdigest()[:10])),
         })
 
     with open(os.path.join(OUT_DIR, "cases.json"), "w") as f:

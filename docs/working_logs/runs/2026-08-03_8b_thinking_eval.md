@@ -18,6 +18,8 @@ output:
 
 ### Baseline Direct Prompting (8b-thinking, 403 samples): 50.6%
 
+> **更正（2026-08-09）**：此 50.6% 为 08-03 原始实测（max_tokens=4096，53 样本答案被截断；输出文件 `baseline_8b_thinking.jsonl` 已不在仓库）。08-07 vLLM 全量重跑 + recovery 重跑截断样本后，8b-thinking 公平直答为 **54.3% (219/403)**（`outputs/predictions/baseline_qwen3-vl-8b-thinking_vllm_dev_recovered_merged.jsonl`），下文"两模型总分相同"的结论不再成立。
+
 | Task | 8b-thinking | plus (V4) | Delta |
 |------|------------|-----------|-------|
 | Soccer_Shot | **72%** | 49% | **+23pp** |

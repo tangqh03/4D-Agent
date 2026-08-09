@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import base64
 import io
+import os
 import threading
 
 from flask import Flask, jsonify, request
@@ -33,7 +34,8 @@ app = Flask(__name__)
 
 _MODELS = {}
 _LOCK = threading.Lock()
-GDINO_PATH = "/mnt/xlab-nas-wm/gaozhe.gz/hf_datasets/grounding-dino-base"
+GDINO_PATH = os.environ.get(
+    "GDINO_PATH", "/mnt/xlab-nas-wm/gaozhe.gz/hf_datasets/grounding-dino-base")
 DEVICE = "cuda"
 
 

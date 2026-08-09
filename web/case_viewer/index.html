@@ -42,6 +42,10 @@ video { max-width:480px; border-radius:8px; background:#000; }
 .ev-result { color:var(--dim); font-size:12px; white-space:pre-wrap;
              border-left:3px solid var(--line); padding:2px 8px;
              max-height:120px; overflow-y:auto; }
+.ev-think { color:#93a0c0; font-style:italic; background:rgba(91,141,239,.06);
+            border-left:3px solid var(--accent); padding:4px 8px;
+            white-space:pre-wrap; word-break:break-word; }
+.ev-think .tag { font-style:normal; font-size:12px; }
 .ev-img img { max-width:320px; border-radius:6px; border:1px solid var(--line);
               cursor:zoom-in; }
 .ev-img img.zoom { max-width:100%; cursor:zoom-out; }
@@ -145,11 +149,21 @@ function show(c) {
   if (c.traj.length) {
     h += `<div class="card"><b>Stage 2 轨迹</b> <span class="dim">(${
           c.traj.filter(e => e.t === 'tool').length} 次工具调用, ${
-          c.traj.filter(e => e.t === 'img').length} 张图)</span><div class="traj">`;
+          c.traj.filter(e => e.t === 'img').length} 张图, ${
+          c.traj.filter(e => e.t === 'think').length} 段思考)</span>`;
+    if (c.traj_shared)
+      h += `<div class="dim" style="color:var(--tool);border-left:3px solid var(--tool);
+            padding:2px 8px;margin-top:6px">⚠ 模板级轨迹:本题目文本与 ${c.traj_videos - 1}
+            个其他视频共享(session 未记录视频标识),轨迹不保证对应本视频
+            (${c.traj_sessions} 个 session 归入此模板)</div>`;
+    h += `<div class="traj">`;
     for (const ev of c.traj) {
       if (ev.t === 'text') {
         const fin = /FINAL[:：]/.test(ev.text) ? ' final' : '';
         h += `<div class="ev ev-text${fin}">${esc(ev.text)}</div>`;
+      } else if (ev.t === 'think') {
+        h += `<div class="ev ev-think"><span class="tag dim">💭 思考${
+              ev.chars ? ` (${ev.chars} 字符)` : ''}</span><br>${esc(ev.text)}</div>`;
       } else if (ev.t === 'tool') {
         h += `<div class="ev ev-tool">▶ ${ev.name} ${esc(ev.args)}</div>`;
       } else if (ev.t === 'result') {

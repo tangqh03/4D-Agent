@@ -1,5 +1,5 @@
 ---
-status: active
+status: awaiting_approval
 created: YYYY-MM-DD
 ---
 
@@ -420,9 +420,25 @@ submit_answer(answer, key_claim):
 - Analyze closure trigger rate across all 15 task types
 - Consider making the re-observation guidance more actionable (e.g., include specific time range to check)
 
+### Regression Hardening (2026-08-08)
+
+在不启动 GPU/LLM 评测的前提下，补充了基于真实扩展源码的 jiti + ffmpeg 集成测试，
+并按测试暴露结果修复了 s2.6 边界问题：
+
+- 失败/空 observation 不再伪装成 PERCEPTION evidence；crop 的实际 clamp 时间写回
+  details/ledger；`submit_answer` 接受后不重复调用 checker。
+- observation 工具拒绝反向时间片段、空 timestamps、非法 bbox，并统一缺少视频
+  `time_s` 的友好错误路径。
+- eval parser 支持连续 swallowed tool calls、扩展工具 trace、assistant-role 过滤；
+  answer parser 修复 `Clockwise`/`Counterclockwise` substring 冲突。
+
+验证：`node agent/pi_ext/tests/run.mjs` **76/76**；
+`/opt/conda/bin/python agent/tests/test_eval_pi_parse.py` **16/16**；
+`/opt/conda/bin/python -m py_compile agent/eval_pi_agentic.py agent/tests/test_eval_pi_parse.py`
+通过。详细 run log：`docs/working_logs/runs/2026-08-08_pi_ext_tools_tests.md`。
+
 * (link to new or updated code map, or N/A)
 
 ### Suggested Next Step
 
 - ...
-
