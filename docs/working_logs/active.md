@@ -20,6 +20,16 @@ last_updated: 2026-08-09
 - 详见 run log `docs/working_logs/runs/2026-08-09_s26_bugfix_64k_smoke.md` 和 handoff
   `docs/working_logs/handoffs/2026-08-09_s26_bugfix_64k_dev403_claude.md`。
 
+## 已提交 + 交接 zhe gao（2026-08-09）
+
+- tqh 本批 S2.6 bugfix 已 commit（`7eb198a`，40 文件）：null-content 工具崩溃修复、
+  64k 上下文、committed-answer 恢复、case viewer 增强、离线测试套件（Node 93/93 +
+  Python 全过）、`build_case_viewer.py` S1/S2 缺失文件自动跳过（他人环境兼容）。
+- 交接文档：`docs/working_logs/handoffs/2026-08-09_zhe_gao_main_merge.md`
+  （zhe gao 环境与 main 一致、无需本地 vLLM；默认 amap-gateway 不变；
+  合并 = 纯新增 + 小改，无 schema/API 变更）。
+- 合并 main + PR：见 PR #（合并后补填）。
+
 ## Current Focus: S2.6 × qwen3-vl-8b-thinking dev403 全量（2026-08-08，GPU 0/1 TP=2 本地 vLLM :8001）
 
 按交接文档执行：本地 vLLM qwen3-vl-8b-thinking（TP=2，GPU 0/1，port 8001，
