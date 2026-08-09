@@ -1,15 +1,18 @@
 /**
- * Evidence Closure — S2.6 silent ledger + submit_answer gate.
+ * Evidence Closure — S2.7 visual evidence store + multimodal closure checker.
  *
  * Silent ledger: records observation provenance via tool_result hook
  * (same mapEvent logic as evidence_ledger.ts) but NEVER injects into
  * context. The agent works freely as in S2.4b.
  *
+ * Runtime evidence store: caches image payloads from tool results in
+ * memory, keyed by evidence ID. Images are NOT persisted to session JSONL.
+ *
  * submit_answer tool: the agent calls this instead of writing FINAL
- * directly. A lightweight VLM checker assesses whether the key claim
- * is backed by direct visual PERCEPTION evidence or only by text
- * inference / DERIVATION. If a gap is found, the agent gets ONE
- * chance to re-observe before the answer is auto-accepted.
+ * directly. A multimodal VLM checker receives the key claim, relevant
+ * evidence metadata, AND the actual images from those observations.
+ * If a gap is found, the agent gets ONE chance to re-observe before
+ * the answer is auto-accepted.
  *
  * Usage: pi -p -e vistr_video_tools.ts -e evidence_closure.ts "..."
  */
@@ -32,6 +35,11 @@ type Space =
 	| { kind: "bbox"; box: number[]; frame: number[] }
 	| { kind: "unknown" };
 
+interface ImageRef {
+	data: string;      // base64
+	mimeType: string;
+}
+
 interface Evidence {
 	id: string;
 	source: string;
@@ -42,6 +50,10 @@ interface Evidence {
 	lifecycle: "ACTIVE";
 	relations: Array<{ type: "REFINES"; of: string }>;
 	producer_metadata: Record<string, unknown>;
+	/** Runtime-only image cache — never persisted to session JSONL. */
+	images: ImageRef[];
+	/** Brief text snippets from tool result (first text block, truncated). */
+	text_snippet: string;
 }
 
 // ── Spatiotemporal helpers ───────────────────────────────────────────
@@ -103,7 +115,7 @@ function fmtSpace(s: Space): string {
 // ── Tool result → Evidence mapper (same as evidence_ledger.ts) ──────
 
 function mapEvent(toolName: string, input: any, details: any): Omit<Evidence,
-	"id" | "agent_step" | "lifecycle" | "relations"> | null {
+	"id" | "agent_step" | "lifecycle" | "relations" | "images" | "text_snippet"> | null {
 	const times: number[] | undefined = details?.times;
 	switch (toolName) {
 		case "index_video":
@@ -165,6 +177,102 @@ async function gatewayConfig(): Promise<{ baseUrl: string; apiKey: string; model
 	return { baseUrl: prov.baseUrl, apiKey: prov.apiKey, model };
 }
 
+// ── Relevance selection: pick evidence entries relevant to key_claim ──
+
+/**
+ * Score each PERCEPTION evidence entry for relevance to the key_claim.
+ * Uses heuristics: time overlap with claimed timestamps, source type
+ * preference (crop > sequence > multiframe), and REFINES chain proximity.
+ * Returns top-N entries sorted by relevance score descending.
+ */
+function selectRelevantEvidence(
+	ledger: Evidence[],
+	keyClaim: string,
+	maxEntries: number,
+	maxImages: number,
+): Evidence[] {
+	// Extract timestamps from key_claim (e.g., "at 2.5s", "t=1.0", "around 3s")
+	const timePattern = /(\d+\.?\d*)\s*s/g;
+	const claimTimes: number[] = [];
+	let m: RegExpExecArray | null;
+	while ((m = timePattern.exec(keyClaim)) !== null) {
+		claimTimes.push(parseFloat(m[1]));
+	}
+
+	const perceptionOnly = ledger.filter((e) => e.epistemic_type === "PERCEPTION");
+
+	const scored = perceptionOnly.map((e) => {
+		let score = 0;
+
+		// Time proximity: how close are the claim times to this evidence's time?
+		if (claimTimes.length > 0) {
+			const evTimes: number[] = [];
+			if (e.world_time.kind === "point") evTimes.push(e.world_time.t);
+			else if (e.world_time.kind === "discrete") evTimes.push(...e.world_time.ts);
+			else if (e.world_time.kind === "interval") {
+				// For intervals, check if any claim time falls within
+				for (const ct of claimTimes) {
+					if (ct >= e.world_time.t0 - EPS && ct <= e.world_time.t1 + EPS) {
+						score += 10; // direct containment
+					}
+				}
+				// Also consider interval midpoint distance
+				const mid = (e.world_time.t0 + e.world_time.t1) / 2;
+				evTimes.push(mid);
+			}
+			for (const ct of claimTimes) {
+				for (const et of evTimes) {
+					const dist = Math.abs(ct - et);
+					if (dist < 0.3) score += 8;
+					else if (dist < 1.0) score += 4;
+					else if (dist < 2.0) score += 1;
+				}
+			}
+		}
+
+		// Source type preference: spatially precise tools are more relevant
+		switch (e.source) {
+			case "semantic_crop": score += 5; break;
+			case "read_crop": score += 4; break;
+			case "read_multiframe": score += 3; break;
+			case "read_video_sequence": score += 2; break;
+		}
+
+		// REFINES chain: refined evidence (more specific) gets a bonus
+		if (e.relations.length > 0) score += 2;
+
+		// Recency bonus: later observations are more likely to be decisive
+		score += e.agent_step * 0.5;
+
+		// Has images?
+		if (e.images.length > 0) score += 3;
+
+		return { entry: e, score };
+	});
+
+	scored.sort((a, b) => b.score - a.score);
+
+	// Select top entries, respecting image budget
+	const selected: Evidence[] = [];
+	let imageCount = 0;
+	for (const { entry } of scored) {
+		if (selected.length >= maxEntries) break;
+		const entryImages = Math.min(entry.images.length, 2); // max 2 images per entry
+		if (imageCount + entryImages > maxImages) {
+			// Try to fit at least 1 image
+			if (imageCount < maxImages && entry.images.length > 0) {
+				selected.push(entry);
+				imageCount += 1;
+			}
+			continue;
+		}
+		selected.push(entry);
+		imageCount += entryImages;
+	}
+
+	return selected;
+}
+
 // ── Extension entry point ───────────────────────────────────────────
 
 export default function evidenceClosure(pi: ExtensionAPI) {
@@ -172,16 +280,32 @@ export default function evidenceClosure(pi: ExtensionAPI) {
 	let step = 0;
 	let oneShotUsed = false;
 
-	// ── Silent tool_result hook: record evidence, never expose ────
+	// ── Silent tool_result hook: record evidence + cache images ────
 	pi.on("tool_result", async (event: any) => {
 		if (event.isError) return;
 		if (event.toolName === "submit_answer") return;
 		const mapped = mapEvent(event.toolName, event.input, event.details);
 		if (!mapped) return;
 		step += 1;
+
+		// Extract images and text snippets from tool result content
+		const images: ImageRef[] = [];
+		let textSnippet = "";
+		const content = event.content as Array<{ type: string; data?: string; mimeType?: string; text?: string }> | undefined;
+		if (Array.isArray(content)) {
+			for (const block of content) {
+				if (block.type === "image" && block.data) {
+					images.push({ data: block.data, mimeType: block.mimeType ?? "image/jpeg" });
+				} else if (block.type === "text" && block.text && !textSnippet) {
+					textSnippet = block.text.slice(0, 200);
+				}
+			}
+		}
+
 		const ev: Evidence = {
 			...mapped, id: `E${ledger.length + 1}`, agent_step: step,
 			lifecycle: "ACTIVE", relations: [],
+			images, text_snippet: textSnippet,
 		};
 		for (const old of ledger) {
 			const tSub = timeSubset(ev.world_time, old.world_time);
@@ -192,7 +316,12 @@ export default function evidenceClosure(pi: ExtensionAPI) {
 			}
 		}
 		ledger.push(ev);
-		pi.appendEntry("evidence-closure", { transition: "ADD", evidence: ev });
+		// Persist metadata only (no images) to session JSONL
+		const { images: _, ...metadata } = ev;
+		pi.appendEntry("evidence-closure", {
+			transition: "ADD",
+			evidence: { ...metadata, image_count: images.length },
+		});
 	});
 
 	// ── submit_answer tool ───────────────────────────────────────
@@ -238,13 +367,14 @@ export default function evidenceClosure(pi: ExtensionAPI) {
 				};
 			}
 
-			// Build compact ledger summary
+			// Build compact ledger summary (metadata only, for context)
 			const summary = ledger.length === 0
 				? "(no observations recorded)"
 				: ledger.map((e) => {
 					const rel = e.relations.length
 						? ` [refines ${e.relations.map((r) => r.of).join(",")}]` : "";
-					return `${e.id} | ${e.source} | ${e.epistemic_type} | time=${fmtTime(e.world_time)} | space=${fmtSpace(e.space)}${rel}`;
+					const img = e.images.length > 0 ? ` (${e.images.length} imgs)` : "";
+					return `${e.id} | ${e.source} | ${e.epistemic_type} | time=${fmtTime(e.world_time)} | space=${fmtSpace(e.space)}${img}${rel}`;
 				}).join("\n");
 
 			// Quick heuristic: if zero evidence at all, skip VLM call
@@ -272,7 +402,6 @@ export default function evidenceClosure(pi: ExtensionAPI) {
 			// Check: any PERCEPTION evidence at all?
 			const hasPerception = ledger.some((e) => e.epistemic_type === "PERCEPTION");
 			if (!hasPerception) {
-				// Only DERIVATION (index_video captions) — definite gap
 				oneShotUsed = true;
 				pi.appendEntry("evidence-closure", {
 					transition: "GAP_DERIVATION_ONLY",
@@ -293,21 +422,60 @@ export default function evidenceClosure(pi: ExtensionAPI) {
 				};
 			}
 
-			// VLM closure check
-			const checkerPrompt =
+			// ── Select relevant evidence with images for the checker ──
+			const MAX_CHECKER_IMAGES = 4;
+			const MAX_CHECKER_ENTRIES = 3;
+			const relevant = selectRelevantEvidence(ledger, params.key_claim, MAX_CHECKER_ENTRIES, MAX_CHECKER_IMAGES);
+
+			// Collect images from selected evidence (respect budget)
+			const checkerImages: Array<{ evidenceId: string; source: string; time: string; img: ImageRef }> = [];
+			let imgBudget = MAX_CHECKER_IMAGES;
+			for (const ev of relevant) {
+				for (const img of ev.images) {
+					if (imgBudget <= 0) break;
+					checkerImages.push({
+						evidenceId: ev.id,
+						source: ev.source,
+						time: fmtTime(ev.world_time),
+						img,
+					});
+					imgBudget--;
+				}
+			}
+
+			console.error(`[evidence-closure] selected ${relevant.length} evidence entries, ${checkerImages.length} images for checker`);
+
+			// ── Build multimodal checker content ──
+			const checkerText =
 				`You are an evidence auditor — NOT a problem solver. Do NOT re-answer the question.\n\n` +
 				`Question: ${question}\n` +
 				`Proposed answer: ${params.answer}\n` +
 				`Agent's key claim: ${params.key_claim}\n\n` +
-				`Observations the agent made (chronological):\n${summary}\n\n` +
-				`PERCEPTION = agent directly viewed video frames (read_video_sequence, read_multiframe, semantic_crop, read_crop)\n` +
-				`DERIVATION = text caption from automated timeline (index_video)\n\n` +
-				`Assess ONLY: Is the key_claim directly confirmed by PERCEPTION evidence ` +
-				`that covers the relevant time and space? Or is it only supported by ` +
-				`DERIVATION, text reasoning, or external knowledge?\n\n` +
+				`Full observation ledger (chronological):\n${summary}\n\n` +
+				(checkerImages.length > 0
+					? `Below are the actual visual observations most relevant to the key claim. ` +
+					  `Examine them carefully to determine if they directly confirm or refute the key claim.\n\n`
+					: `No visual evidence images are available for review.\n\n`) +
+				`Assess ONLY: Is the key_claim directly confirmed by the visual evidence shown? ` +
+				`Do NOT infer or assume — judge only what is visible in the images.\n\n` +
 				`Reply EXACTLY one line:\nCLOSURE: YES\nor\nCLOSURE: NO | <one sentence: what visual check is missing>`;
 
-			console.error(`[evidence-closure] running VLM closure check...`);
+			// Build multimodal content array for OpenAI-compatible API
+			const userContent: Array<Record<string, unknown>> = [
+				{ type: "text", text: checkerText },
+			];
+			for (const ci of checkerImages) {
+				userContent.push({
+					type: "text",
+					text: `[${ci.evidenceId}] ${ci.source} @ ${ci.time}:`,
+				});
+				userContent.push({
+					type: "image_url",
+					image_url: { url: `data:${ci.img.mimeType};base64,${ci.img.data}` },
+				});
+			}
+
+			console.error(`[evidence-closure] running multimodal VLM closure check (${checkerImages.length} images)...`);
 			try {
 				const gw = await gatewayConfig();
 				const resp = await fetch(`${gw.baseUrl}/chat/completions`, {
@@ -315,11 +483,11 @@ export default function evidenceClosure(pi: ExtensionAPI) {
 					headers: { "Content-Type": "application/json", Authorization: `Bearer ${gw.apiKey}` },
 					body: JSON.stringify({
 						model: gw.model,
-						messages: [{ role: "user", content: checkerPrompt }],
-						max_tokens: 100,
+						messages: [{ role: "user", content: userContent }],
+						max_tokens: 150,
 						temperature: 0,
 					}),
-					signal: AbortSignal.timeout(30_000),
+					signal: AbortSignal.timeout(60_000),
 				});
 				if (!resp.ok) throw new Error(`checker HTTP ${resp.status}`);
 				const data = (await resp.json()) as { choices: Array<{ message: { content: string } }> };
@@ -333,6 +501,7 @@ export default function evidenceClosure(pi: ExtensionAPI) {
 						answer: params.answer,
 						key_claim: params.key_claim,
 						checker_reply: reply,
+						images_sent: checkerImages.length,
 					});
 					return {
 						content: [{
@@ -352,6 +521,7 @@ export default function evidenceClosure(pi: ExtensionAPI) {
 					key_claim: params.key_claim,
 					checker_reply: reply,
 					gap,
+					images_sent: checkerImages.length,
 				});
 				return {
 					content: [{

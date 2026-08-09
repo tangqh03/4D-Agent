@@ -41,7 +41,13 @@ def api_cases():
              "s23": ({"pred": c["s23"]["pred"], "correct": c["s23"]["correct"]}
                      if c.get("s23") else None),
              "s24": ({"pred": c["s24"]["pred"], "correct": c["s24"]["correct"]}
-                     if c.get("s24") else None)}
+                     if c.get("s24") else None),
+             "s24full": ({"pred": c["s24full"]["pred"], "correct": c["s24full"]["correct"]}
+                          if c.get("s24full") else None),
+             "s26": ({"pred": c["s26"]["pred"], "correct": c["s26"]["correct"]}
+                     if c.get("s26") else None),
+             "s27": ({"pred": c["s27"]["pred"], "correct": c["s27"]["correct"]}
+                     if c.get("s27") else None)}
             for c in CASES]
     return jsonify(slim)
 
@@ -199,6 +205,8 @@ function render() {
       (c.s22 ? `<span class="badge ${c.s22.correct ? 'b-ok' : 'b-bad'}">S2.2</span>` : '') +
       (c.s23 ? `<span class="badge ${c.s23.correct ? 'b-ok' : 'b-bad'}">S2.3</span>` : '') +
       (c.s24 ? `<span class="badge ${c.s24.correct ? 'b-ok' : 'b-bad'}">S2.4b</span>` : '') +
+      (c.s26 ? `<span class="badge ${c.s26.correct ? 'b-ok' : 'b-bad'}">S2.6</span>` : '') +
+      (c.s27 ? `<span class="badge ${c.s27.correct ? 'b-ok' : 'b-bad'}">S2.7</span>` : '') +
       `<span class="dim">#${c.id}</span>` +
       `<div class="q">${esc(c.question)}</div>`;
     div.onclick = () => { sel = c.id; render(); show(c.id); };
@@ -251,11 +259,20 @@ async function show(id) {
         <span class="${c.s23.correct ? 'b-ok' : 'b-bad'} badge">${c.s23.pred ?? '—'}</span>` : ''}
         ${c.s24 ? `<span>Stage 2.4b (semantic_crop)</span>
         <span class="${c.s24.correct ? 'b-ok' : 'b-bad'} badge">${c.s24.pred ?? '—'}</span>` : ''}
+        ${c.s24full ? `<span>S2.4b 全量</span>
+        <span class="${c.s24full.correct ? 'b-ok' : 'b-bad'} badge">${c.s24full.pred ?? '—'}</span>` : ''}
+        ${c.s26 ? `<span>S2.6 (closure)</span>
+        <span class="${c.s26.correct ? 'b-ok' : 'b-bad'} badge">${c.s26.pred ?? '—'}</span>` : ''}
+        ${c.s27 ? `<span>S2.7 (visual closure)</span>
+        <span class="${c.s27.correct ? 'b-ok' : 'b-bad'} badge">${c.s27.pred ?? '—'}</span>` : ''}
         <span class="dim">S2/S2.1 耗时</span><span class="dim">${c.s2.elapsed}s${c.s21 ? ' / '+c.s21.elapsed+'s' : ''}</span>
         </div></div>`;
   h += `</div>`;
   const trajs = [];
-  if (c.traj24 && c.traj24.length) trajs.push(['S2.4b (semantic_crop)', c.traj24]);
+  if (c.traj27 && c.traj27.length) trajs.push(['S2.7 (visual closure)', c.traj27]);
+  if (c.traj26 && c.traj26.length) trajs.push(['S2.6 (closure)', c.traj26]);
+  if (c.traj24full && c.traj24full.length) trajs.push(['S2.4b 全量', c.traj24full]);
+  if (c.traj24 && c.traj24.length) trajs.push(['S2.4b (90题)', c.traj24]);
   if (c.traj23 && c.traj23.length) trajs.push(['S2.3 (read_crop)', c.traj23]);
   if (c.traj22 && c.traj22.length) trajs.push(['S2.2 (index+证据帧)', c.traj22]);
   if (c.traj21 && c.traj21.length) trajs.push(['S2.1 (多图工具)', c.traj21]);

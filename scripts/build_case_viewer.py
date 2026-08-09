@@ -34,6 +34,12 @@ S23_PATH = os.path.join(PROJ, "outputs", "predictions",
                         "pi_agentic_ext3_qwen_pt6_20260807.jsonl")
 S24_PATH = os.path.join(PROJ, "outputs", "predictions",
                         "pi_agentic_ext4b_qwen_pt6_20260807.jsonl")
+S26_PATH = os.path.join(PROJ, "outputs", "predictions",
+                        "pi_s26_dev_20260808.jsonl")
+S27_PATH = os.path.join(PROJ, "outputs", "predictions",
+                        "pi_s27_dev_20260809.jsonl")
+S24FULL_PATH = os.path.join(PROJ, "outputs", "predictions",
+                            "pi_s24b_dev_20260809.jsonl")
 SESS_GLOB = os.path.expanduser("~/.pi/agent/sessions/--tmp-pi_ws_*/*.jsonl")
 OUT_DIR = os.path.join(PROJ, "web", "case_viewer", "data")
 IMG_W = 640
@@ -187,6 +193,24 @@ def main():
     matched24 = match_sessions(list(s24.values()), sess_files) if s24 else {}
     print(f"S2.4b matched trajectories: {len(matched24)}/{len(s24)}")
 
+    s26 = {}
+    if os.path.exists(S26_PATH):
+        s26 = {r["id"]: r for r in load_jsonl(S26_PATH)}
+    matched26 = match_sessions(list(s26.values()), sess_files) if s26 else {}
+    print(f"S2.6 matched trajectories: {len(matched26)}/{len(s26)}")
+
+    s27 = {}
+    if os.path.exists(S27_PATH):
+        s27 = {r["id"]: r for r in load_jsonl(S27_PATH)}
+    matched27 = match_sessions(list(s27.values()), sess_files) if s27 else {}
+    print(f"S2.7 matched trajectories: {len(matched27)}/{len(s27)}")
+
+    s24full = {}
+    if os.path.exists(S24FULL_PATH):
+        s24full = {r["id"]: r for r in load_jsonl(S24FULL_PATH)}
+    matched24full = match_sessions(list(s24full.values()), sess_files) if s24full else {}
+    print(f"S2.4b-full matched trajectories: {len(matched24full)}/{len(s24full)}")
+
     cases = []
     for r in sorted(s2rows, key=lambda x: (x["task"], x["id"])):
         cid = r["id"]
@@ -219,6 +243,18 @@ def main():
                      "elapsed": round(s24[cid].get("elapsed_s", 0))}
                     if cid in s24 else None),
             "traj24": save_traj(cid, matched24, "images24"),
+            "s26": ({"pred": s26[cid].get("pred"), "correct": s26[cid].get("correct"),
+                     "elapsed": round(s26[cid].get("elapsed_s", 0))}
+                    if cid in s26 else None),
+            "traj26": save_traj(cid, matched26, "images26"),
+            "s27": ({"pred": s27[cid].get("pred"), "correct": s27[cid].get("correct"),
+                     "elapsed": round(s27[cid].get("elapsed_s", 0))}
+                    if cid in s27 else None),
+            "traj27": save_traj(cid, matched27, "images27"),
+            "s24full": ({"pred": s24full[cid].get("pred"), "correct": s24full[cid].get("correct"),
+                         "elapsed": round(s24full[cid].get("elapsed_s", 0))}
+                        if cid in s24full else None),
+            "traj24full": save_traj(cid, matched24full, "images24full"),
         })
 
     with open(os.path.join(OUT_DIR, "cases.json"), "w") as f:
