@@ -63,7 +63,9 @@ const EPS = 0.15;
 function timeSubset(a: WorldTime, b: WorldTime): boolean {
 	if (b.kind === "unknown" || a.kind === "unknown") return false;
 	const pts = (w: WorldTime): number[] | null =>
-		w.kind === "point" ? [w.t] : w.kind === "discrete" ? w.ts : null;
+		w.kind === "point" ? [w.t]
+			: w.kind === "discrete" && w.ts.length > 0 && w.ts.every(Number.isFinite) ? w.ts
+				: null;
 	const within = (t: number): boolean =>
 		b.kind === "interval" ? t >= b.t0 - EPS && t <= b.t1 + EPS
 		: b.kind === "discrete" ? b.ts.some((x) => Math.abs(x - t) <= EPS)
@@ -117,41 +119,48 @@ function fmtSpace(s: Space): string {
 function mapEvent(toolName: string, input: any, details: any): Omit<Evidence,
 	"id" | "agent_step" | "lifecycle" | "relations" | "images" | "text_snippet"> | null {
 	const times: number[] | undefined = details?.times;
+	const validTimes = (value: unknown): value is number[] =>
+		Array.isArray(value) && value.length > 0 && value.every((t) => typeof t === "number" && Number.isFinite(t));
+	const validBox = (value: unknown): value is number[] =>
+		Array.isArray(value) && value.length === 4 && value.every((v) => typeof v === "number" && Number.isFinite(v));
+	const validFrame = (value: unknown): value is number[] =>
+		Array.isArray(value) && value.length === 2 && value.every((v) => typeof v === "number" && Number.isFinite(v) && v > 0);
 	switch (toolName) {
 		case "index_video":
+			if (details?.caption_ok === false) return null;
 			return { source: toolName,
-				world_time: times?.length ? { kind: "discrete", ts: times } : { kind: "unknown" },
+				world_time: validTimes(times) ? { kind: "discrete", ts: times } : { kind: "unknown" },
 				space: { kind: "global" }, epistemic_type: "DERIVATION",
 				producer_metadata: { num_frames: times?.length ?? null } };
 		case "read_video_sequence":
+			if (!validTimes(times)) return null;
 			return { source: toolName,
-				world_time: times?.length
-					? { kind: "interval", t0: Math.min(...times), t1: Math.max(...times) }
-					: { kind: "unknown" },
+				world_time: { kind: "interval", t0: Math.min(...times), t1: Math.max(...times) },
 				space: { kind: "global" }, epistemic_type: "PERCEPTION",
-				producer_metadata: { sampled_ts: times ?? null } };
+				producer_metadata: { sampled_ts: times } };
 		case "read_multiframe":
+			if (!validTimes(times)) return null;
 			return { source: toolName,
-				world_time: times?.length ? { kind: "discrete", ts: times } : { kind: "unknown" },
+				world_time: { kind: "discrete", ts: times },
 				space: { kind: "global" }, epistemic_type: "PERCEPTION",
 				producer_metadata: {} };
 		case "semantic_crop": {
+			if (!validBox(details?.crop_bbox) || !validFrame(details?.frame_size)) return null;
 			const t = details?.time_s;
+			if (t !== undefined && t !== null && (typeof t !== "number" || !Number.isFinite(t))) return null;
 			return { source: toolName,
 				world_time: typeof t === "number" ? { kind: "point", t } : { kind: "unknown" },
-				space: details?.crop_bbox && details?.frame_size
-					? { kind: "bbox", box: details.crop_bbox, frame: details.frame_size }
-					: { kind: "unknown" },
+				space: { kind: "bbox", box: details.crop_bbox, frame: details.frame_size },
 				epistemic_type: "PERCEPTION",
 				producer_metadata: { target: details?.target ?? input?.target ?? null } };
 		}
 		case "read_crop": {
+			if (!validBox(details?.pixels) || !validFrame(details?.source)) return null;
 			const t = details?.time_s;
+			if (t !== undefined && t !== null && (typeof t !== "number" || !Number.isFinite(t))) return null;
 			return { source: toolName,
 				world_time: typeof t === "number" ? { kind: "point", t } : { kind: "unknown" },
-				space: details?.pixels && details?.source
-					? { kind: "bbox", box: details.pixels, frame: details.source }
-					: { kind: "unknown" },
+				space: { kind: "bbox", box: details.pixels, frame: details.source },
 				epistemic_type: "PERCEPTION",
 				producer_metadata: {} };
 		}
@@ -166,6 +175,11 @@ function mapEvent(toolName: string, input: any, details: any): Omit<Evidence,
 			return null;
 	}
 }
+
+// ── Test surface ─────────────────────────────────────────────────────
+// Pure helpers exported for unit tests (agent/pi_ext/tests/). pi's
+// extension loader only consumes the default export, so these are
+// behavior-neutral.
 
 // ── VLM gateway config (same as vistr_video_tools.ts) ───────────────
 
@@ -279,6 +293,7 @@ export default function evidenceClosure(pi: ExtensionAPI) {
 	const ledger: Evidence[] = [];
 	let step = 0;
 	let oneShotUsed = false;
+	let accepted = false;
 
 	// ── Silent tool_result hook: record evidence + cache images ────
 	pi.on("tool_result", async (event: any) => {
@@ -351,8 +366,26 @@ export default function evidenceClosure(pi: ExtensionAPI) {
 			console.error(`[evidence-closure] submit_answer called: answer="${params.answer}" key_claim="${params.key_claim}" ledger_size=${ledger.length} oneshot=${oneShotUsed}`);
 			const question = process.env.VISTR_QUESTION ?? "";
 
+			// Once accepted, do not spend another checker call if the model repeats
+			// the submission while finishing its final response.
+			if (accepted) {
+				pi.appendEntry("evidence-closure", {
+					transition: "ACCEPT_ALREADY",
+					answer: params.answer,
+					key_claim: params.key_claim,
+				});
+				return {
+					content: [{
+						type: "text",
+						text: `Answer already accepted. Now write your final answer on a new line:\nFINAL: ${params.answer}`,
+					}],
+					details: { accepted: true, closure: "already_accepted" },
+				};
+			}
+
 			// One-shot gate: second call always accepts
 			if (oneShotUsed) {
+				accepted = true;
 				pi.appendEntry("evidence-closure", {
 					transition: "ACCEPT_ONESHOT",
 					answer: params.answer,
@@ -486,16 +519,23 @@ export default function evidenceClosure(pi: ExtensionAPI) {
 						messages: [{ role: "user", content: userContent }],
 						max_tokens: 150,
 						temperature: 0,
+						// Qwen3 thinking models spend their whole budget in the
+						// thinking phase and never emit a content line (content=null
+						// -> checker TypeError -> error_bypass). The auditor is a
+						// classification task: disable thinking. Harmless for
+						// non-thinking models.
+						chat_template_kwargs: { enable_thinking: false },
 					}),
 					signal: AbortSignal.timeout(60_000),
 				});
 				if (!resp.ok) throw new Error(`checker HTTP ${resp.status}`);
 				const data = (await resp.json()) as { choices: Array<{ message: { content: string } }> };
-				const reply = data.choices[0].message.content.trim();
+				const reply = (data.choices[0].message.content ?? "").trim();
 				console.error(`[evidence-closure] checker reply: ${reply}`);
 				const closureMatch = reply.match(/CLOSURE:\s*(YES|NO)\s*(?:\|\s*(.+))?/i);
 
 				if (closureMatch && closureMatch[1].toUpperCase() === "YES") {
+					accepted = true;
 					pi.appendEntry("evidence-closure", {
 						transition: "CLOSURE_YES",
 						answer: params.answer,
@@ -537,6 +577,7 @@ export default function evidenceClosure(pi: ExtensionAPI) {
 				};
 			} catch (err) {
 				// Checker failed — don't block the agent, accept gracefully
+				accepted = true;
 				pi.appendEntry("evidence-closure", {
 					transition: "CHECKER_ERROR",
 					answer: params.answer,
@@ -554,3 +595,6 @@ export default function evidenceClosure(pi: ExtensionAPI) {
 		},
 	});
 }
+
+// Test surface (behavior-neutral named exports; see note above).
+export { timeSubset, timeStrict, spaceSubset, spaceStrict, fmtTime, fmtSpace, mapEvent };

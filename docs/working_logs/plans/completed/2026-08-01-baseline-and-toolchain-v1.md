@@ -188,7 +188,7 @@ T2 ego-motion 补偿 + T4 轨迹外推 + 证据摘要器）实现 driving 双任
 | V2 (observe+judge+recipe) | 57.8% | recipe + VLM observe+judge fallback |
 | V4 (action plan, plus) | 55.6% | 模型选动作 → 预建代码 → hybrid verify |
 | Baseline (plus) | 50.6% | direct prompting |
-| Baseline (8b-thinking) | 50.6% | direct prompting, 与 plus 互补 |
+| Baseline (8b-thinking) | 54.3% (recovery 后修正, 2026-08-09) | direct prompting, 与 plus 互补 |
 
 ### Changed Files
 

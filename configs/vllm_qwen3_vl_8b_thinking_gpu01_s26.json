@@ -1,0 +1,30 @@
+{
+  "model": "/data/Qwen3-VL-8B-Thinking/",
+  "served_model_name": "qwen3-vl-8b-thinking",
+  "host": "127.0.0.1",
+  "port": 8001,
+  "cuda_visible_devices": "0,1",
+  "tensor_parallel_size": 2,
+  "max_model_len": 40960,
+  "max_num_seqs": 2,
+  "dtype": "auto",
+  "gpu_memory_utilization": 0.90,
+  "trust_remote_code": true,
+  "enable_prefix_caching": true,
+  "enable_auto_tool_choice": true,
+  "tool_call_parser": "hermes",
+  "qwen3_vl": {
+    "mm_encoder_tp_mode": "data",
+    "async_scheduling": true,
+    "distributed_executor_backend": "mp",
+    "mm_processor_cache_gb": 20,
+    "attention_backend": "TRITON_ATTN",
+    "reasoning_parser": "qwen3"
+  },
+  "client": {
+    "base_url": "http://127.0.0.1:8001/v1",
+    "model": "qwen3-vl-8b-thinking",
+    "api_key": "bearer",
+    "pi_provider": "vllm-local"
+  }
+}

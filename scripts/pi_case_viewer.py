@@ -6,9 +6,11 @@
 
 用法:
     /opt/conda/bin/python scripts/pi_case_viewer.py --port 7875
+    /opt/conda/bin/python scripts/pi_case_viewer.py --port 7877 --data-dir web/case_viewer/data_pt6
     # 访问: http://<notebook-host>:8080/proxy/7875/  (或对应代理路径)
 
 数据: 先运行 scripts/build_case_viewer.py 生成 web/case_viewer/data/。
+      --data-dir 指向另一份构建产物(如 HF 下载的 qwen_pt6 轨迹包),可多实例并存。
 """
 
 import argparse
@@ -17,11 +19,21 @@ import os
 
 from flask import Flask, jsonify, request, send_file, abort
 
-app = Flask(__name__)
-
 PROJ_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(PROJ_DIR, "web", "case_viewer", "data")
+
+def _parse_args():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--port", type=int, default=7875)
+    ap.add_argument("--data-dir", default=os.path.join("web", "case_viewer", "data"),
+                    help="cases.json 所在目录(相对项目根或绝对路径)")
+    return ap.parse_args()
+
+ARGS = _parse_args()
+DATA_DIR = (ARGS.data_dir if os.path.isabs(ARGS.data_dir)
+            else os.path.join(PROJ_DIR, ARGS.data_dir))
 BENCH_DIR = os.path.join(PROJ_DIR, "data", "benchmarks", "ViSTR-Bench-Public")
+
+app = Flask(__name__)
 
 with open(os.path.join(DATA_DIR, "cases.json")) as f:
     CASES = json.load(f)
@@ -123,6 +135,10 @@ video { max-width:480px; border-radius:8px; background:#000; }
 .ev-result { color:var(--dim); font-size:12px; white-space:pre-wrap;
              border-left:3px solid var(--line); padding:2px 8px;
              max-height:120px; overflow-y:auto; }
+.ev-think { color:#93a0c0; font-style:italic; background:rgba(91,141,239,.06);
+            border-left:3px solid var(--accent); padding:4px 8px;
+            white-space:pre-wrap; word-break:break-word; }
+.ev-think .tag { font-style:normal; font-size:12px; }
 .ev-img img { max-width:320px; border-radius:6px; border:1px solid var(--line);
               cursor:zoom-in; }
 .ev-img img.zoom { max-width:100%; cursor:zoom-out; }
@@ -218,11 +234,15 @@ function trajHtml(traj, title) {
   if (!traj || !traj.length) return '';
   let s = `<div class="card" style="margin-bottom:14px"><b>${title}</b> <span class="dim">(${
         traj.filter(e => e.t === 'tool').length} 次工具调用, ${
-        traj.filter(e => e.t === 'img').length} 张图)</span>`;
+        traj.filter(e => e.t === 'img').length} 张图, ${
+        traj.filter(e => e.t === 'think').length} 段思考)</span>`;
   for (const ev of traj) {
     if (ev.t === 'text') {
       const cls = /FINAL[:：]/.test(ev.text) ? 'ev-final' : 'ev-text';
       s += `<div class="ev ${cls}">${esc(ev.text)}</div>`;
+    } else if (ev.t === 'think') {
+      s += `<div class="ev ev-think"><span class="tag dim">💭 思考${
+            ev.chars ? ` (${ev.chars} 字符)` : ''}</span><br>${esc(ev.text)}</div>`;
     } else if (ev.t === 'tool') {
       s += `<div class="ev ev-tool">▶ ${ev.name} ${esc(ev.args)}</div>`;
     } else if (ev.t === 'result') {
@@ -306,9 +326,6 @@ def index():
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=7875)
-    args = parser.parse_args()
-    print(f"[INFO] {len(CASES)} cases loaded")
-    print(f"[INFO] Starting on http://0.0.0.0:{args.port}")
-    app.run(host="0.0.0.0", port=args.port)
+    print(f"[INFO] {len(CASES)} cases loaded from {DATA_DIR}")
+    print(f"[INFO] Starting on http://0.0.0.0:{ARGS.port}")
+    app.run(host="0.0.0.0", port=ARGS.port)

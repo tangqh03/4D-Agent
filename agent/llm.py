@@ -25,7 +25,11 @@ _keys = itertools.cycle(_CFG["api_keys"]) if _CFG["api_keys"] else itertools.cyc
 
 def chat(messages, max_tokens=1500, temperature=0.0, timeout=180, retries=4,
          model=None):
-    """One chat completion. Rotates API keys; backs off on 429/5xx."""
+    """One chat completion. Rotates API keys; backs off on 429/5xx.
+
+    Returns both the final answer and the provider's reasoning field when the
+    OpenAI-compatible server exposes one (vLLM/Qwen uses ``reasoning``).
+    """
     body = json.dumps({"model": model or MODEL, "messages": messages,
                        "max_tokens": max_tokens,
                        "temperature": temperature}).encode()
@@ -43,8 +47,14 @@ def chat(messages, max_tokens=1500, temperature=0.0, timeout=180, retries=4,
                 last_err = f"No choices in response: {json.dumps(d)[:300]}"
                 time.sleep(min(2 ** attempt * 3, 45))
                 continue
-            return {"content": d["choices"][0]["message"]["content"],
-                    "usage": d.get("usage", {})}
+            choice = d["choices"][0]
+            message = choice.get("message", {})
+            return {
+                "content": message.get("content") or "",
+                "reasoning": (message.get("reasoning")
+                              or message.get("reasoning_content") or ""),
+                "usage": d.get("usage", {}),
+            }
         except urllib.error.HTTPError as e:
             code = e.code
             detail = e.read()[:300]

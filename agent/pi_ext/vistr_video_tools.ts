@@ -38,6 +38,41 @@ function clampT(t: number, dur: number): number {
 	return Math.max(0, Math.min(t, Math.max(0, dur - 0.1)));
 }
 
+// ── Subcall reply parsing: thinking goes to its own slot ──────────────
+// The gateway model may be a thinking model (qwen3-vl-8b-thinking): vLLM's
+// reasoning parser returns the committed answer in `content` and the
+// deliberation in `reasoning_content` — and when the model produces only a
+// thinking block, `content` is null. Mirror pi-ai's reasoningFields: keep
+// the two apart, never substitute reasoning for content (deliberation is
+// not a committed answer — e.g. candidate numbers mentioned then rejected).
+const REASONING_FIELDS = ["reasoning_content", "reasoning", "reasoning_text"];
+const MAX_REASONING_CHARS = 600; // context cap for the surfaced thinking
+
+function parseChatReply(data: unknown): { content: string; reasoning: string } {
+	const msg = (data as { choices?: Array<{ message?: Record<string, unknown> }> })
+		?.choices?.[0]?.message ?? {};
+	const content = typeof msg.content === "string" ? msg.content.trim() : "";
+	const reasoning = REASONING_FIELDS
+		.map((k) => (typeof msg[k] === "string" ? (msg[k] as string).trim() : ""))
+		.find((s) => s.length > 0) ?? "";
+	return { content, reasoning };
+}
+
+// toolResult has no native thinking part (session format), so the subcall's
+// deliberation is surfaced as its own clearly-labeled text block — never
+// merged into the answer text.
+function thinkingBlock(reasoning: string, label: string): Block | null {
+	if (!reasoning.trim()) return null;
+	const shown = reasoning.length > MAX_REASONING_CHARS
+		? reasoning.slice(0, MAX_REASONING_CHARS) + `… (+${reasoning.length - MAX_REASONING_CHARS} chars)`
+		: reasoning;
+	return { type: "text", text: `[${label} thinking]\n${shown}` };
+}
+
+// Test surface (behavior-neutral named export; pi's loader only consumes
+// the default export).
+export { clampT, parseChatReply, thinkingBlock };
+
 async function grabFrame(video: string, t: number, outDir: string, i: number): Promise<string> {
 	const out = join(outDir, `f_${i}.jpg`);
 	await run("ffmpeg", [
@@ -78,7 +113,11 @@ async function gatewayConfig(): Promise<{ baseUrl: string; apiKey: string; model
 
 // One batch VLM call: objective per-timestamp captions. Deliberately receives
 // NO task/question context — it must stay a neutral semantic timeline.
-async function captionTimeline(video: string, times: number[]): Promise<string> {
+// Returns { ok:false, error, reasoning } when the model produced no answer
+// text (thinking-only reply); the caller surfaces the error plus the
+// labeled thinking block instead of crashing on a null content.
+async function captionTimeline(video: string, times: number[]): Promise<
+	{ ok: true; text: string; reasoning: string } | { ok: false; error: string; reasoning: string }> {
 	const dir = await mkdtemp(join(tmpdir(), "vistr_index_"));
 	try {
 		const content: Array<Record<string, unknown>> = [{
@@ -106,14 +145,26 @@ async function captionTimeline(video: string, times: number[]): Promise<string> 
 			body: JSON.stringify({
 				model: gw.model,
 				messages: [{ role: "user", content }],
-				max_tokens: 1000,
+				// Thinking models spend a chunk of the budget on the forced
+				// <think> preamble: 1000 tokens frequently ended inside the
+				// thinking block (content=null). 1500 leaves room to finish
+				// thinking AND emit the caption lines.
+				max_tokens: 1500,
 				temperature: 0,
 			}),
 			signal: AbortSignal.timeout(120_000),
 		});
 		if (!resp.ok) throw new Error(`caption request failed: HTTP ${resp.status}`);
-		const data = (await resp.json()) as { choices: Array<{ message: { content: string } }> };
-		return data.choices[0].message.content.trim();
+		const data = (await resp.json()) as unknown;
+		const parsed = parseChatReply(data);
+		const reasoning = parsed.reasoning;
+		if (!parsed.content) {
+			return { ok: false,
+				error: `caption subcall returned no answer text (model produced only a thinking block). ` +
+					`Retry index_video, or use read_video_sequence/read_multiframe directly.`,
+				reasoning };
+		}
+		return { ok: true, text: parsed.content, reasoning };
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
@@ -123,19 +174,24 @@ export default function vistrVideoTools(pi: ExtensionAPI) {
 	const PERCEPTION_URL = process.env.VISTR_PERCEPTION_URL ?? "http://127.0.0.1:7876";
 	const CROP_MARGIN = 0.15; // fixed tool-level context margin, never task-tuned
 
-	async function extractFullFrame(src: string, time_s: number | undefined, dir: string): Promise<string> {
+	async function extractFullFrame(src: string, time_s: number | undefined, dir: string): Promise<{ path: string; time_s?: number }> {
 		const isVideo = /\.(mp4|avi|mov|mkv|webm)$/i.test(src);
-		if (!isVideo) return src;
+		if (!isVideo) return { path: src };
 		if (time_s === undefined) throw new Error("time_s is required for video paths");
 		const dur = await videoDuration(src);
+		const actualTime = clampT(time_s, dur);
 		const frame = join(dir, "frame.png");
-		await run("ffmpeg", ["-y", "-ss", clampT(time_s, dur).toFixed(3), "-i", src, "-frames:v", "1", frame]);
-		return frame;
+		await run("ffmpeg", ["-y", "-ss", actualTime.toFixed(3), "-i", src, "-frames:v", "1", frame]);
+		return { path: frame, time_s: actualTime };
 	}
 
 	// Isolated selection subcall: sees ONLY the annotated candidates and the
 	// target expression — never the benchmark question/options/hypotheses.
-	async function selectCandidate(annotatedB64: string, target: string, ids: number[]): Promise<number> {
+	// Parses the committed number from `content` ONLY (never from reasoning —
+	// deliberation mentions candidates that get rejected). Empty content →
+	// { ok:false } so the caller fails gracefully instead of crashing.
+	async function selectCandidate(annotatedB64: string, target: string, ids: number[]): Promise<
+		{ ok: true; id: number; reasoning: string } | { ok: false; error: string; reasoning: string }> {
 		const gw = await gatewayConfig();
 		const resp = await fetch(`${gw.baseUrl}/chat/completions`, {
 			method: "POST",
@@ -152,16 +208,33 @@ export default function vistrVideoTools(pi: ExtensionAPI) {
 						{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${annotatedB64}` } },
 					],
 				}],
-				max_tokens: 8,
+				// Was 8 — a thinking model cannot even finish its forced
+				// <think> preamble in 8 tokens, so content was always null.
+				max_tokens: 128,
 				temperature: 0,
 			}),
 			signal: AbortSignal.timeout(60_000),
 		});
 		if (!resp.ok) throw new Error(`selection subcall failed: HTTP ${resp.status}`);
-		const data = (await resp.json()) as { choices: Array<{ message: { content: string } }> };
-		const m = data.choices[0].message.content.match(/\d+/);
-		const chosen = m ? parseInt(m[0], 10) : ids[0];
-		return ids.includes(chosen) ? chosen : ids[0];
+		const data = (await resp.json()) as unknown;
+		const parsed = parseChatReply(data);
+		const reasoning = parsed.reasoning;
+		if (!parsed.content) {
+			return { ok: false,
+				error: `selection subcall returned no answer text (model produced only a thinking block). ` +
+					`Retry semantic_crop with a more specific target description.`,
+				reasoning };
+		}
+		const exact = parsed.content.match(/^(\d+)$/);
+		if (exact && ids.includes(parseInt(exact[1], 10))) {
+			return { ok: true, id: parseInt(exact[1], 10), reasoning };
+		}
+		// Non-compliant reply: prefer the last mentioned candidate id (the
+		// committed choice tends to come last); else fall back to id[0].
+		const mentions = [...parsed.content.matchAll(/\b(\d+)\b/g)]
+			.map((m) => parseInt(m[1], 10))
+			.filter((n) => ids.includes(n));
+		return { ok: true, id: mentions.length ? mentions[mentions.length - 1] : ids[0], reasoning };
 	}
 
 	pi.registerTool({
@@ -182,9 +255,18 @@ export default function vistrVideoTools(pi: ExtensionAPI) {
 		}),
 		async execute(_id, params: { path: string; target: string; time_s?: number }) {
 			const src = resolve(params.path);
+			const isVideo = /\.(mp4|avi|mov|mkv|webm)$/i.test(src);
+			if (params.time_s !== undefined && !Number.isFinite(params.time_s)) {
+				return { content: [{ type: "text", text: "Error: time_s must be a finite number." }], details: {} };
+			}
+			if (isVideo && params.time_s === undefined) {
+				return { content: [{ type: "text", text: "Error: time_s is required for video paths." }], details: {} };
+			}
 			const dir = await mkdtemp(join(tmpdir(), "vistr_sem_"));
 			try {
-				const frame = await extractFullFrame(src, params.time_s, dir);
+				const extracted = await extractFullFrame(src, params.time_s, dir);
+				const frame = extracted.path;
+				const actualTime = extracted.time_s;
 				const frameB64 = (await readFile(frame)).toString("base64");
 				const gresp = await fetch(`${PERCEPTION_URL}/ground`, {
 					method: "POST",
@@ -203,9 +285,23 @@ export default function vistrVideoTools(pi: ExtensionAPI) {
 						`No region found for "${params.target}". Try a simpler noun phrase ` +
 						`(e.g. object names) or different wording.` }], details: {} };
 				}
-				const chosen = g.candidates.length === 1
-					? g.candidates[0].id
-					: await selectCandidate(g.annotated_b64!, params.target, g.candidates.map((c) => c.id));
+				let chosen: number;
+				let selectReasoning = "";
+				if (g.candidates.length === 1) {
+					chosen = g.candidates[0].id;
+				} else {
+					const sel = await selectCandidate(g.annotated_b64!, params.target, g.candidates.map((c) => c.id));
+					selectReasoning = sel.reasoning;
+					if (!sel.ok) {
+						const blocks: Block[] = [{ type: "text", text: `Error: ${sel.error}` }];
+						const tb = thinkingBlock(sel.reasoning, "selection subcall");
+						if (tb) blocks.push(tb);
+						return { content: blocks,
+							details: { path: params.path, time_s: actualTime ?? null, target: params.target,
+								candidate_count: g.candidates.length, selection_mode: "vlm_select_failed" } };
+					}
+					chosen = sel.id;
+				}
 				const cand = g.candidates.find((c) => c.id === chosen)!;
 				let [x0, y0, x1, y1] = cand.bbox;
 				const mw = (x1 - x0) * CROP_MARGIN, mh = (y1 - y0) * CROP_MARGIN;
@@ -221,19 +317,22 @@ export default function vistrVideoTools(pi: ExtensionAPI) {
 					signal: AbortSignal.timeout(60_000),
 				});
 				const receipt = ((await aresp.json()) as { annotated_b64: string }).annotated_b64;
+				const outContent: Block[] = [
+					{ type: "text", text:
+						`semantic_crop "${params.target}"${actualTime !== undefined ? ` @ t=${actualTime.toFixed(2)}s` : ""}: ` +
+						`chose candidate #${cand.id} (phrase "${cand.phrase}", score ${cand.score}) of ${g.candidates.length}. ` +
+						`Grounding receipt (chosen box on full frame):` },
+					{ type: "image", data: receipt, mimeType: "image/jpeg" },
+					{ type: "text", text: `High-resolution crop (${x1 - x0}×${y1 - y0}px of ${g.width}×${g.height}):` },
+					{ type: "image", data: cropB64, mimeType: "image/jpeg" },
+				];
+				const tb = thinkingBlock(selectReasoning, "selection subcall");
+				if (tb) outContent.push(tb);
 				return {
-					content: [
-						{ type: "text", text:
-							`semantic_crop "${params.target}"${params.time_s !== undefined ? ` @ t=${params.time_s.toFixed(2)}s` : ""}: ` +
-							`chose candidate #${cand.id} (phrase "${cand.phrase}", score ${cand.score}) of ${g.candidates.length}. ` +
-							`Grounding receipt (chosen box on full frame):` },
-						{ type: "image", data: receipt, mimeType: "image/jpeg" },
-						{ type: "text", text: `High-resolution crop (${x1 - x0}×${y1 - y0}px of ${g.width}×${g.height}):` },
-						{ type: "image", data: cropB64, mimeType: "image/jpeg" },
-					],
+					content: outContent,
 					details: {
 						path: params.path,
-						time_s: params.time_s ?? null,
+						time_s: actualTime ?? null,
 						target: params.target,
 						frame_size: [g.width, g.height],
 						grounding_bbox: cand.bbox,
@@ -258,8 +357,11 @@ export default function vistrVideoTools(pi: ExtensionAPI) {
 			`original resolution. Give the region as a normalized bounding box ` +
 			`[x0, y0, x1, y1] on a 0-1000 scale of the full frame (0,0 = top-left, ` +
 			`1000,1000 = bottom-right) — do NOT compute pixel coordinates yourself. ` +
-			`For a video path you must also give time_s. If the crop misses the target, ` +
-			`adjust the bbox and call again (ground → crop → re-observe → refine).`,
+			`For a video path you must also give time_s. A bbox selects one static image ` +
+			`region; it does not track a moving target across timestamps. Re-localize a ` +
+			`moving target with semantic_crop or update the bbox at each timestamp. If the ` +
+			`crop misses the target, adjust the bbox and call again ` +
+			`(ground → crop → re-observe → refine).`,
 		promptSnippet: "Zoom into a region of an image/video frame via a normalized bbox",
 		parameters: Type.Object({
 			path: Type.String({ description: "Path to an image file or a video file" }),
@@ -273,16 +375,31 @@ export default function vistrVideoTools(pi: ExtensionAPI) {
 		async execute(_id, params: { path: string; bbox: number[]; time_s?: number }) {
 			const src = resolve(params.path);
 			const isVideo = /\.(mp4|avi|mov|mkv|webm)$/i.test(src);
+			if (!Array.isArray(params.bbox) || params.bbox.length !== 4 ||
+				!params.bbox.every((v) => typeof v === "number" && Number.isFinite(v))) {
+				return { content: [{ type: "text", text: "Error: bbox must contain exactly four finite numbers." }], details: {} };
+			}
+			if (params.bbox.every((v) => v >= 0 && v <= 1)) {
+				return { content: [{ type: "text", text:
+					"Error: bbox appears to use a 0-1 scale, but read_crop requires " +
+					"[x0, y0, x1, y1] on a 0-1000 scale. Multiply normalized " +
+					"coordinates by 1000, or use semantic_crop to re-localize the target." }], details: {} };
+			}
+			if (params.time_s !== undefined && !Number.isFinite(params.time_s)) {
+				return { content: [{ type: "text", text: "Error: time_s must be a finite number." }], details: {} };
+			}
 			const dir = await mkdtemp(join(tmpdir(), "vistr_crop_"));
 			try {
 				let frame = src;
+				let actualTime: number | undefined;
 				if (isVideo) {
 					if (params.time_s === undefined) {
 						return { content: [{ type: "text", text: "Error: time_s is required for video paths." }], details: {} };
 					}
 					const dur = await videoDuration(src);
+					actualTime = clampT(params.time_s, dur);
 					frame = join(dir, "frame.png");
-					await run("ffmpeg", ["-y", "-ss", clampT(params.time_s, dur).toFixed(3),
+					await run("ffmpeg", ["-y", "-ss", actualTime.toFixed(3),
 						"-i", src, "-frames:v", "1", frame]);
 				}
 				const { stdout } = await run("ffprobe", ["-v", "error", "-select_streams", "v:0",
@@ -301,10 +418,10 @@ export default function vistrVideoTools(pi: ExtensionAPI) {
 				const data = (await readFile(out)).toString("base64");
 				return {
 					content: [
-						{ type: "text", text: `Crop of ${params.path}${isVideo ? ` @ t=${params.time_s!.toFixed(2)}s` : ""}, bbox [${nb.join(", ")}]/1000 → ${x1 - x0}×${y1 - y0}px of ${w}×${h} original:` },
+						{ type: "text", text: `Crop of ${params.path}${actualTime !== undefined ? ` @ t=${actualTime.toFixed(2)}s` : ""}, bbox [${nb.join(", ")}]/1000 → ${x1 - x0}×${y1 - y0}px of ${w}×${h} original:` },
 						{ type: "image", data, mimeType: "image/jpeg" },
 					],
-					details: { path: params.path, time_s: params.time_s ?? null,
+					details: { path: params.path, time_s: actualTime ?? null,
 						pixels: [x0, y0, x1, y1], source: [w, h] },
 				};
 			} finally {
@@ -332,16 +449,19 @@ export default function vistrVideoTools(pi: ExtensionAPI) {
 		async execute(_id, params: { path: string; num_frames?: number }) {
 			const video = resolve(params.path);
 			const dur = await videoDuration(video);
-			const n = Math.max(4, Math.min(Math.round(params.num_frames ?? 8), INDEX_MAX_FRAMES));
+			const requested = params.num_frames ?? 8;
+			const n = Math.max(4, Math.min(Number.isFinite(requested) ? Math.round(requested) : 8, INDEX_MAX_FRAMES));
 			const times = Array.from({ length: n }, (_, i) => clampT((dur * i) / (n - 1), dur));
-			const timeline = await captionTimeline(video, times);
-			return {
-				content: [{
-					type: "text",
-					text: `Video ${params.path} (duration ${dur.toFixed(2)}s), semantic timeline (${n} sampled frames):\n${timeline}`,
-				}],
-				details: { times },
-			};
+			const tl = await captionTimeline(video, times);
+			const parts: Block[] = [{
+				type: "text",
+				text: tl.ok
+					? `Video ${params.path} (duration ${dur.toFixed(2)}s), semantic timeline (${n} sampled frames):\n${tl.text}`
+					: `Error: ${tl.error}`,
+			}];
+			const tb = thinkingBlock(tl.reasoning, "caption subcall");
+			if (tb) parts.push(tb);
+			return { content: parts, details: { times, caption_ok: tl.ok } };
 		},
 	});
 
@@ -362,10 +482,17 @@ export default function vistrVideoTools(pi: ExtensionAPI) {
 		}),
 		async execute(_id, params: { path: string; start_s: number; end_s: number; num_frames?: number }) {
 			const video = resolve(params.path);
+			if (!Number.isFinite(params.start_s) || !Number.isFinite(params.end_s)) {
+				return { content: [{ type: "text", text: "Error: start_s and end_s must be finite numbers." }], details: {} };
+			}
+			if (params.start_s > params.end_s) {
+				return { content: [{ type: "text", text: "Error: start_s must be less than or equal to end_s." }], details: {} };
+			}
 			const dur = await videoDuration(video);
 			const start = clampT(params.start_s, dur);
-			const end = Math.max(start, clampT(params.end_s, dur));
-			const n = Math.max(2, Math.min(Math.round(params.num_frames ?? 6), MAX_FRAMES));
+			const end = clampT(params.end_s, dur);
+			const requested = params.num_frames ?? 6;
+			const n = Math.max(2, Math.min(Number.isFinite(requested) ? Math.round(requested) : 6, MAX_FRAMES));
 			const times = Array.from({ length: n }, (_, i) => start + ((end - start) * i) / (n - 1));
 			const content = await framesContent(video, times);
 			content.unshift({
@@ -393,6 +520,10 @@ export default function vistrVideoTools(pi: ExtensionAPI) {
 		}),
 		async execute(_id, params: { path: string; times_s: number[] }) {
 			const video = resolve(params.path);
+			if (!Array.isArray(params.times_s) || params.times_s.length === 0 ||
+				!params.times_s.every((t) => typeof t === "number" && Number.isFinite(t))) {
+				return { content: [{ type: "text", text: "Error: times_s must contain at least one finite timestamp." }], details: {} };
+			}
 			const dur = await videoDuration(video);
 			const times = params.times_s.slice(0, MAX_FRAMES).map((t) => clampT(t, dur));
 			const content = await framesContent(video, times);

@@ -1,7 +1,7 @@
 ---
 status: active
 scope: general
-last_verified: 2026-08-08
+last_verified: 2026-08-09
 owner: gaozhe
 ---
 
@@ -50,7 +50,7 @@ Index of all scripts in this project. Each entry documents purpose, usage, input
 **Usage**: `VISTR_PI_EXTENSION="agent/pi_ext/vistr_video_tools.ts,agent/pi_ext/evidence_closure.ts" python agent/eval_pi_agentic.py [--per-task 6] [--workers 4] [--resume]`
 **Inputs**: benchmark `data.json` + 视频; pi 安装于 `third_party/pi-runtime/`; extensions 通过 `VISTR_PI_EXTENSION` 指定
 **Outputs**: `outputs/predictions/pi_agentic_*.jsonl` 或 `--output` 指定
-**Notes**: 环境变量 `VISTR_PI_PROVIDER`/`VISTR_PI_MODEL` 切换; extension 路径自动转绝对路径; 含 closure 诊断字段
+**Notes**: 环境变量 `VISTR_PI_PROVIDER`/`VISTR_PI_MODEL` 切换; extension 路径自动转绝对路径; 输出含 `answer_source/no_answer/termination`，S2.6 无 FINAL 时只接受成功 submit，不从 reasoning 猜答案; code map `docs/code_maps/systems/pi_observation_stack.md`
 
 ### agent/pi_ext/vistr_video_tools.ts
 **Purpose**: pi extension — 观察原语五件套(index_video / read_video_sequence / read_multiframe / read_crop / semantic_crop)
@@ -62,7 +62,7 @@ Index of all scripts in this project. Each entry documents purpose, usage, input
 **Purpose**: pi extension — S2.6 evidence closure gate(silent ledger + submit_answer 工具 + VLM closure checker)
 **Usage**: 与 vistr_video_tools.ts 一起加载: `VISTR_PI_EXTENSION="...,agent/pi_ext/evidence_closure.ts"`
 **Inputs**: `VISTR_QUESTION` 环境变量(eval 脚本自动设置); VLM gateway `~/.pi/agent/models.json`
-**Notes**: 不注入 context(区别于 evidence_ledger.ts); one-shot gate; checker 纯文本无图
+**Notes**: 不注入 context(区别于 evidence_ledger.ts); one-shot gate; checker 纯文本无图; code map `docs/code_maps/systems/pi_observation_stack.md`
 
 ### agent/pi_ext/evidence_ledger.ts
 **Purpose**: pi extension — S2.5 evidence board(tool_result hook 记录 + context hook 注入 dashboard)
@@ -87,16 +87,23 @@ Index of all scripts in this project. Each entry documents purpose, usage, input
 
 ### scripts/build_case_viewer.py
 **Purpose**: 生成 pi case viewer 数据包(S1/S2 预测 join + pi session 轨迹/看过的帧提取)
-**Usage**: `/opt/conda/bin/python scripts/build_case_viewer.py`
-**Inputs**: `outputs/predictions/pi_*_dev_20260806.jsonl` ×2 + `~/.pi/agent/sessions/--tmp-pi_ws_*`
-**Outputs**: `web/case_viewer/data/`(cases.json + 缩略帧,~80MB,gitignored)
-**Notes**: 轨迹按题目文本+答案指纹匹配 session;重跑评测后需重新构建
+**Usage**: `/opt/conda/bin/python scripts/build_case_viewer.py`(默认 S2 = s26 dev403;各档路径可用 `VISTR_BCV_S1/S2/S21..S24` 环境变量覆盖,空串跳过该档)
+**Inputs**: `outputs/predictions/pi_s26_qwen3-vl-8b-thinking_vllm_gpu01_dev403_20260808.jsonl` + baseline + `~/.pi/agent/sessions/--tmp-pi_ws_*`
+**Outputs**: `web/case_viewer/data/`(cases.json + 缩略帧,gitignored)
+**Notes**: 轨迹按 toolCall-id 精确匹配(无 tool_trace 的行走题目模板 fallback 并标记 traj_shared);含 thinking 事件(前 1000 字符 + 全长 chars);切回 dev_fix 或 plus 版: `VISTR_BCV_S2=outputs/predictions/pi_agentic_qwen3-vl-8b-thinking_vllm_dev_fix.jsonl` 重建 / 跑 `build_case_viewer_hf.py`,随后重启 viewer(cases.json 在 import 时加载)
+
+### scripts/build_case_viewer_hf.py
+**Purpose**: 从下载的 HF 轨迹数据集(outputs/hf_export/)构建 case viewer 数据包——与 build_case_viewer.py 同 schema,但用 tar 内 manifest.json 的 sample_id→session 精确匹配(qwen3-vl-plus 上传版 predictions 无 tool_trace,无法 toolCall-id 匹配)
+**Usage**: `/opt/conda/envs/spatialagent/bin/python scripts/build_case_viewer_hf.py`
+**Inputs**: `outputs/hf_export/predictions_stage{1,2}.jsonl` + `outputs/hf_export/sessions/manifest.json`(解包后的 stage2 tar)
+**Outputs**: `web/case_viewer/data/`(覆盖;403/403 精确匹配,~110MB)
+**Notes**: 复用 build_case_viewer.py 的 parse_session/shrink_image/save_traj;S1/S2 两阶段,无 S21–24
 
 ### scripts/pi_case_viewer.py
 **Purpose**: pi case 浏览前端(S1/S2 对比、视频回放、Stage2 工具轨迹+看过的帧);Flask 单页 + 相对路径 API,代理友好(参考 7874 的 v3_case_viewer 模式)
 **Usage**: `/home/admin/.conda/envs/star/bin/python -u scripts/pi_case_viewer.py --port 7875`;notebook 代理访问 `/proxy/7875/`
 **Inputs**: `web/case_viewer/data/`(先跑 build_case_viewer.py)+ benchmark 视频
-**Notes**: 无 websocket 依赖;`web/case_viewer/index.html` 为静态版备用
+**Notes**: 无 websocket 依赖;`web/case_viewer/index.html` 为静态版备用;轨迹渲染含 thinking 段(💭 思考,数据包需经 build_case_viewer 系列生成 think 事件)
 
 ### scripts/upload_hf_pi_trajs.py
 **Purpose**: 打包 S1/S2 pi 轨迹(session JSONL + manifest)并上传 HF dataset(`MihailSlutsky/vistr-pi-trajectories`)
@@ -169,3 +176,25 @@ Index of all scripts in this project. Each entry documents purpose, usage, input
 **Usage**: `/opt/conda/bin/python scripts/gen_task_posters.py`
 **Inputs**: benchmark `data.json` + 每任务首个视频
 **Outputs**: `web/posters/<Task_Name>.jpg`（480×270）
+
+### scripts/analyze_pi_behavior.py
+**Purpose**: pi agentic 行为对比分析(plus vs 8b-thinking)——轨迹级指标 + 每任务准确率 + 分歧矩阵
+**Usage**: `/opt/conda/envs/spatialagent/bin/python scripts/analyze_pi_behavior.py`
+**Inputs**: `outputs/hf_export/predictions_stage2.jsonl` + HF sessions(manifest 匹配);`outputs/predictions/pi_agentic_*dev_fix.jsonl` / `pi_s26_*.jsonl` + `~/.pi/agent/sessions`(toolCall-id 匹配)
+**Outputs**: 控制台对比报告
+**Notes**: 会量化 thinking 字符数(前端不可见的思考槽);详见 run log `runs/2026-08-09_pi_plus_vs_8b_behavior.md`
+
+### agent/pi_ext/tests/run.mjs
+**Purpose**: pi 扩展工具（vistr_video_tools.ts + evidence_closure.ts）单元/集成测试套件；jiti 加载真实扩展源码，fetch 打桩 mock gateway/perception，ffmpeg 生成真实测试视频
+**Usage**: `node agent/pi_ext/tests/run.mjs`（可选 `--filter=name`）
+**Inputs**: 需要 `/opt/conda/envs/spatialagent/bin` ffmpeg（harness 自动加入 PATH）、`~/.pi/agent/models.json`（只需存在）
+**Outputs**: 控制台 ✓/✗ + 汇总；退出码非 0 表示失败
+**Notes**: 无网络/GPU/LLM 调用；`agent/pi_ext/*.ts` 中 `export {…}` 为行为中性的测试面导出
+**Cases (2026-08-09, 93 全过)**: harness 打桩支持 thinking 回复形态（`{content, reasoning}` / content=null）；覆盖 subcall 思考/正文分离、失败 index 不入 ledger、0-1 bbox 定向报错、select max_tokens≥128 与严格数字解析
+
+### agent/tests/test_eval_pi_parse.py
+**Purpose**: eval_pi_agentic.py 事件流解析（_parse_pi_json / _repair_swallowed_tool_calls / extract_answer）单元测试
+**Usage**: `/opt/conda/bin/python agent/tests/test_eval_pi_parse.py`
+**Inputs**: 仅源码，无外部依赖
+**Outputs**: 控制台 ok/FAIL；退出码非 0 表示失败
+**Cases (2026-08-09, 21 全过)**: 含 tool details/provider error 解析、FINAL 优先、最后一次 accepted submit 恢复、S2.6 rejected-only 无答案、非 S2.6 reasoning fallback
