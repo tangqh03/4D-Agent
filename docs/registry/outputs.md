@@ -106,10 +106,10 @@ Index of all output directories and artifacts produced by this project.
 **Notes**: silent ledger + submit_answer + VLM closure checker; 相比 S2.4b +5.5pp; Interaction/Mikado/Passage/Jenga/Swimming/Soccer 提升最大(+16~17pp each)
 
 ### pi S2.6/S2.7/S2.4b/S2.8 全量 dev 结果
-**Path**: `outputs/predictions/pi_s26_dev_20260808.jsonl`（S2.6 run1, 54.6%）+ `pi_s26_dev_20260808_run2.jsonl`（S2.6 run2, 51.9%）+ `pi_s27_dev_20260809.jsonl`（S2.7 visual closure, 53.6%）+ `pi_s24b_dev_20260809.jsonl`（S2.4b 全量, **56.3%**）+ `pi_s28_dev_20260810.jsonl`（S2.8 context crop, 进行中）
+**Path**: `outputs/predictions/pi_s26_dev_20260808.jsonl`（S2.6 run1, 54.6%）+ `pi_s26_dev_20260808_run2.jsonl`（S2.6 run2, 51.9%）+ `pi_s27_dev_20260809.jsonl`（S2.7 visual closure, 53.6%）+ `pi_s24b_dev_20260809.jsonl`（S2.4b 全量, 56.3%）+ `pi_s28_dev_20260810.jsonl`（S2.8 context crop, **60.8%**）
 **Produced by**: `agent/eval_pi_agentic.py` + 各版本 extension
 **Format**: 同 Stage 2
-**Notes**: S2.4b 全量最优(56.3%/56.5%, 91s/sample); S2.6/S2.7 closure gate 未提升且增加 ~60% 耗时
+**Notes**: **S2.8 全量最优(60.8%/61.1%, 94s/sample)**; S2.4b 次之(56.3%/56.5%); S2.6/S2.7 closure gate 未提升且增加 ~60% 耗时
 
 ### pi S2.8 context-preserving crop 结果
 **Path**: `outputs/predictions/pi_s28_pt6_20260810.jsonl`（per-task 6, 56.7%）+ `pi_s28_pt1_20260810.jsonl`（per-task 1, 66.7%）

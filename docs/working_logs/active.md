@@ -18,17 +18,18 @@ last_updated: 2026-08-10
 5. 去掉 evidence_closure（S2.6/S2.7 全量未提升总分，增加 60% 耗时）
 
 **S2.8 结果**：90-subset 56.7%（与 S2.4b 持平），25s/sample（3.6× 快于 S2.6/2.7）。
-全量评测进行中。
+**全量 403：60.8% micro / 61.1% macro** — 全场最佳，比 S2.4b +4.5pp。
 
 **全量对比（403 题）**：
 | 版本 | Micro | Macro | Avg time | 说明 |
 |------|-------|-------|----------|------|
-| S2.4b | **56.3%** | **56.5%** | 91s | 纯观察原语，无 gate |
+| **S2.8** | **60.8%** | **61.1%** | 94s | context-preserving crop |
+| S2.4b | 56.3% | 56.5% | 91s | 纯观察原语，无 gate |
 | S2.6 r1 | 54.6% | 54.4% | 148s | text-only closure checker |
 | S2.6 r2 | 51.9% | 53.6% | — | 同上，二次跑 |
 | S2.7 | 53.6% | 55.1% | 153s | multimodal closure checker |
 
-结论：closure gate 在全量上未提升总分。S2.4b 纯观察原语是全量最优。
+结论：closure gate 在全量上未提升总分。S2.8 context crop 是当前最优方案。
 
 **Pi extensions**(`agent/pi_ext/`)：
 - `vistr_video_tools.ts` — 5 观察工具 + S2.8 context-preserving crop
@@ -161,7 +162,8 @@ GPU 0/1、TP=2 的 vLLM 部署，现有 8 卡服务的安全切换门禁，主 a
 | qwen3-vl-plus + V4 tools | 55.6% | 403 | — |
 | SpatialClaw | 56.6% | 403 | — |
 | claude-opus-4-6 via pi S1 | 57.1% | 403 | — |
-| **pi S2.4b 全量(纯观察原语)** | **56.3% micro / 56.5% macro** | **403** | **91s** |
+| **pi S2.8 全量(context crop)** | **60.8% micro / 61.1% macro** | **403** | **94s** |
+| pi S2.4b 全量(纯观察原语) | 56.3% micro / 56.5% macro | 403 | 91s |
 | pi S2.6 evidence closure 全量 r1 | 54.6% / 54.4% | 403 | 148s |
 | pi S2.6 evidence closure 全量 r2 | 51.9% / 53.6% | 403 | — |
 | pi S2.7 visual closure 全量 | 53.6% / 55.1% | 403 | 153s |
