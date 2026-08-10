@@ -8,10 +8,9 @@ code_paths:
   - agent/eval_pi_agentic.py
 entrypoints:
   - "pi -p -e agent/pi_ext/vistr_video_tools.ts --provider amap-gateway --model qwen3-vl-plus \"...\""
-  - "pi -p -e agent/pi_ext/vistr_video_tools.ts -e agent/pi_ext/evidence_closure.ts \"...\""
   - "VISTR_PI_EXTENSION=... python agent/eval_pi_agentic.py --per-task 6 --workers 4"
   - "python scripts/perception_service.py --port 7876 --eager"
-last_verified: 2026-08-09
+last_verified: 2026-08-10
 owner: gaozhe
 ---
 
@@ -19,11 +18,14 @@ owner: gaozhe
 
 ## Purpose
 
-为 pi harness 提供 task-agnostic 的视频时空观察原语(时间连续/离散证据/空间放大/语义定位)，
-并在 s2.6 中以 silent ledger 记录 provenance、在提交答案时执行一次 evidence closure gate。
-不含任务路由或领域推理。不处理:采样策略决策、checker 重新解题。
+为 pi harness 提供 task-agnostic 的视频时空观察原语(时间连续/离散证据/空间放大/语义定位)。
+不含任务路由或领域推理。
 
-## Flow Diagram
+S2.8 起 crop 工具从 object-level single-frame crop 重构为
+**context-preserving image/video spatial-temporal zoom** 原语。
+S2.6/S2.7 的 evidence closure 机制在全量评测中未提升总分(见对比表)，当前默认不加载。
+
+## Architecture
 
 ```mermaid
 flowchart TD
@@ -31,49 +33,98 @@ flowchart TD
     B --> C["index_video<br/>均匀采样→batch VLM caption<br/>(无题目上下文)→文本时间线"]
     B --> D["read_video_sequence<br/>时间片段均匀抽帧,多图相邻回注"]
     B --> E["read_multiframe<br/>指定时刻联查(证据帧)"]
-    B --> F["read_crop<br/>normalized bbox [0,1000]→原图裁剪"]
+    B --> F["read_crop<br/>bbox → 单帧裁剪 或 视频段裁剪"]
     B --> G["semantic_crop<br/>英文 target 描述"]
     G -->|HTTP /ground| H["perception_service :7876<br/>GroundingDINO GPU 常驻"]
     H -->|top-6 候选+编号标注图| G
     G -->|隔离 VLM subcall 选 ID<br/>只见候选图+target| I[网关]
-    G -->|15% margin ffmpeg 裁剪| J["receipt(带框全图)+高清 crop 回注"]
+    G -->|contextualROI 扩展| J["单帧: receipt + context crop<br/>视频段: stable ROI → zoomed.mp4"]
     C & D & E & F & J --> A
-    A -->|submit_answer| K["evidence_closure<br/>silent ledger + provenance checker"]
-    K -->|CLOSURE YES / error bypass| A
-    K -->|CLOSURE NO, one-shot| A
-    A -->|message/tool events| L{"eval answer selection"}
-    L -->|valid FINAL| M["pred + answer_source=final"]
-    L -->|no FINAL, accepted submit| N["pred + answer_source=accepted_submit"]
-    L -->|S2.6 no commit| O["pred=null + no_answer=true"]
+    J -->|zoomed video 可递归| B
 ```
+
+## 观察原语一览
+
+| 工具 | 输入 | 输出 | 用途 |
+|------|------|------|------|
+| `index_video` | video path | 文本时间线 | 发现值得看的时刻 |
+| `read_video_sequence` | video + start_s + end_s | 多帧(时序标签) | 连续时间段观察 |
+| `read_multiframe` | video + times_s[] | 多帧(时序标签) | 关键时刻联查 |
+| `semantic_crop` | path + target + (time_s 或 start_s+end_s) | 单帧 crop 或 zoomed video | 语义定位局部场景 |
+| `read_crop` | path + bbox + (time_s 或 start_s+end_s) | 单帧 crop 或 zoomed video | 显式 bbox 局部观察 |
+
+## Crop 工具设计 (S2.8)
+
+### Context-preserving crop
+
+不再是 `entity bbox + 15% margin`，而是：
+
+```
+grounding bbox → contextualROI(60% expansion + 25% min extent) → crop
+```
+
+保留 interaction partner、background reference、relative geometry。
+
+### Video segment zoom
+
+```
+semantic_crop(video, target, start_s=2.0, end_s=6.0)
+  → 在 3 个时间点 ground target
+  → temporal union of bboxes
+  → contextualROI
+  → stable ROI crop entire segment
+  → zoomed_clip.mp4 (保存到 workspace)
+  → agent 可递归 read_video_sequence/semantic_crop
+```
+
+**Stable ROI 原则**：不逐帧跟踪 entity（避免人为 camera motion 抵消 entity 运动），
+整段视频使用同一个 ROI。
+
+### 单帧 vs 视频段
+
+| 模式 | 参数 | 输出 |
+|------|------|------|
+| 单帧 | `time_s` | crop 图片 (base64) |
+| 视频段 | `start_s` + `end_s` | zoomed mp4 + preview frames |
+
+## Evidence Closure (S2.6/S2.7, 当前不加载)
+
+`evidence_closure.ts` 提供 silent ledger + submit_answer gate。
+全量评测表明 closure gate 未提升总分，且增加 ~60% 耗时。保留代码供后续研究。
+
+| 版本 | 90-subset | Full 403 (micro) | Full 403 (macro) | Avg time |
+|------|-----------|-------------------|-------------------|----------|
+| S2.4b (无 gate) | 56.7% | **56.3%** | **56.5%** | 91s |
+| S2.6 (text checker) | 62.2% | 51.9~54.6% | 53.6~54.4% | 148s |
+| S2.7 (visual checker) | 60.0% | 53.6% | 55.1% | 153s |
+
+详见 `docs/code_maps/systems/evidence_closure.md`。
 
 ## Core Pseudocode
 
 ```text
-semantic_crop(path, target, time_s?):
+semantic_crop(path, target, time_s?):          # 单帧模式
     frame = 原始分辨率帧 (视频则 ffmpeg -ss)
     cands = POST /ground {image, target, topk:6, annotate:true}
-    id    = len(cands)==1 ? cands[0] : VLM("哪个编号匹配 target?", 标注图)   # 不见题目
-    box   = cands[id].bbox 外扩 15%(工具级常量,禁按任务调)
-    return [receipt(/annotate 画选中框), crop(原图 ffmpeg)]
+    id    = len(cands)==1 ? cands[0] : VLM("哪个编号匹配 target?", 标注图)
+    roi   = contextualROI(cands[id].bbox, 60% expand, 25% min)
+    return [receipt, crop(frame, roi)]
 
-on observation tool_result:
-    ignore failed index_video caption (caption_ok=false)
-    map valid details to PERCEPTION/DERIVATION evidence
-    record world-time + spatial scope + REFINES relations
+semantic_crop(path, target, start_s, end_s):  # 视频段模式
+    for t in [20%, 50%, 80%] of segment:
+        bbox_t = ground(target, frame_at(t))
+    union = temporal_union(all bbox_t)
+    roi   = contextualROI(union, 60% expand, 25% min)
+    zoomed = ffmpeg crop video[segment] with roi
+    save zoomed to workspace
+    return [preview_frames, zoomed_video_path]
 
-submit_answer(answer, key_claim):
-    if no direct perception: allow one re-observation round
-    else checker(provenance summary)
-    accept on YES, checker failure, or one-shot second submission
-
-eval S2.6 answer:
-    valid FINAL > last accepted submit_answer > no answer
-    persist tool details + provider termination; never use reasoning fallback
+read_crop(path, bbox, time_s? / start_s+end_s?):
+    单帧: crop image at time_s with bbox → base64
+    视频段: crop video[segment] with bbox → zoomed mp4
 
 perception_service:
     启动/首调加载 GroundingDINO → 常驻 GPU;/health /ground /annotate
-    registry dict 可挂 SAM2/DA3/VGGT(未部署)
 ```
 
 ## Code Pointers
@@ -84,10 +135,14 @@ perception_service:
 | `framesContent` | 同上 | 多帧+时间戳标签相邻回注(时序保持的核心) |
 | `captionTimeline` | 同上 | index_video 的 batch caption 调用(硬约束:无题目) |
 | `selectCandidate` | 同上 | semantic_crop 的隔离选择 subcall |
-| `evidenceClosure` | `agent/pi_ext/evidence_closure.ts` | silent ledger、时空 provenance、`submit_answer` one-shot closure gate |
+| `groundAtTime` | 同上 | 单时间点 grounding(视频段模式的子步骤) |
+| `contextualROI` | 同上 | grounding bbox → context-preserving ROI |
+| `cropVideoSegment` | 同上 | ffmpeg 视频段空间裁剪 → zoomed mp4 |
+| `temporalUnion` | 同上 | 多时间点 bbox 求 temporal union |
+| `evidenceClosure` | `agent/pi_ext/evidence_closure.ts` | S2.6/S2.7 closure gate(当前不加载) |
 | `ground()` | `scripts/perception_service.py` | GroundingDINO 推理 + 编号标注图 |
-| `EXTRA_TOOLS_NOTE` | `agent/eval_pi_agentic.py` | user prompt 工具清单(**必须列全**,见 pi_harness.md §3 教训) |
-| `_select_answer` / `_parse_pi_json` | 同上 | committed answer 优先级、tool details 与 provider termination 落盘 |
+| `EXTRA_TOOLS_NOTE` | `agent/eval_pi_agentic.py` | user prompt 工具清单 |
+| `_select_answer` / `_parse_pi_json` | 同上 | committed answer 优先级、tool details 落盘 |
 
 ## Gotchas
 
@@ -95,6 +150,6 @@ perception_service:
 - GroundingDINO 文本仅英文(中文→[UNK])
 - t=duration 抽帧为空 → 全部时间参数经 `clampT(dur-0.1)`
 - perception 服务需先起(:7876),extension 只走 HTTP,禁止加载权重
-- thinking subcall 的 `content=null` 是合法形态；reasoning 不能当 committed content
-- 64k 服务必须与 pi `contextWindow=65536`、`reserveTokens=32768` 同步
-- `read_crop` bbox 是 0-1000 静态区域，不是跨时间目标 tracker
+- thinking subcall 的 `content=null` 是合法形态;reasoning 不能当 committed content
+- zoomed video 写入 agent workspace(当前目录),agent 可对其递归调用工具
+- temporal union 在 grounding 部分失败时仍可用(只需 ≥1 个时间点成功)

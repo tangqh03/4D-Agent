@@ -1,38 +1,39 @@
 ---
 status: active
-last_updated: 2026-08-09
+last_updated: 2026-08-10
 ---
 
 # ViSTR-Agent — Active Work State
 
-## 已部署: S2.6 bugfix + GPU 0–3 / 64k 定向 smoke（2026-08-09）
+## Current Focus: S2.8 — Context-preserving crop + 去掉证据账本 (2026-08-10)
 
-- 新配置 `configs/vllm_qwen3_vl_8b_thinking_gpu0-3_64k.json`:TP=4 GPU 0–3,
-  `max_model_len=65536`、`max_num_seqs=16`、mm cache 50GB、port 8001;
-  目标:修复 s26 无答案 127/403 的 400 死因(40960−32768=8192 输入预算 → 65536−32768=32768)。
-- 已修：null subcall、失败 index evidence、S2.6 accepted-submit 恢复、provider termination
-  诊断、`read_crop` 0-1/静态区域契约；closure 语义盲点暂缓。
-- 离线测试 93/93（Node）+21/21（Python）+ serving patch 6/6；原失败题
-  #114/#118/#229/#332/#863/#866/#909 smoke 7/7 完成，62/62 工具执行、0 tool error、
-  0 provider error、0 null 崩溃、0 context 400（准确率 4/7，不是门禁）。
-- 服务保留：`vllm-64k`（GPU 0–3/:8001）+ `perception-s26`（GPU 6/:7876）；
-  Claude Code 按 handoff 执行 dev403 全量，本 agent 不运行全量。
-- 详见 run log `docs/working_logs/runs/2026-08-09_s26_bugfix_64k_smoke.md` 和 handoff
-  `docs/working_logs/handoffs/2026-08-09_s26_bugfix_64k_dev403_claude.md`。
+基于 S2.4b 的纯观察原语路线（全量 56.3%/56.5%，速度最快 91s/sample），
+重构 crop 工具为 **context-preserving image/video spatial-temporal zoom**：
 
-## 已提交 + 交接 zhe gao（2026-08-09）
+**核心改动**（`vistr_video_tools.ts`）：
+1. `contextualROI()` — grounding bbox → 60% expansion + 25% minimum extent → context-preserving crop
+2. `cropVideoSegment()` — ffmpeg 视频段空间裁剪 → zoomed mp4（写入 workspace，agent 可递归观察）
+3. `temporalUnion()` — 多时间点 grounding bbox 求并集 → stable ROI
+4. `semantic_crop` / `read_crop` 新增 `start_s` + `end_s` 参数 → 视频段 zoom（stable ROI，不逐帧跟踪）
+5. 去掉 evidence_closure（S2.6/S2.7 全量未提升总分，增加 60% 耗时）
 
-- tqh 本批 S2.6 bugfix 已 commit（`7eb198a`，40 文件）：null-content 工具崩溃修复、
-  64k 上下文、committed-answer 恢复、case viewer 增强、离线测试套件（Node 93/93 +
-  Python 全过）、`build_case_viewer.py` S1/S2 缺失文件自动跳过（他人环境兼容）。
-- 交接文档：`docs/working_logs/handoffs/2026-08-09_zhe_gao_main_merge.md`
-  （zhe gao 环境与 main 一致、无需本地 vLLM；默认 amap-gateway 不变；
-  合并 = 纯新增 + 小改，无 schema/API 变更）。
-- 合并 main + PR：PR https://github.com/HeShiLie/4D-Agent/pull/1
-  （tangqh03 仅 pull 权限，需 HeShiLie 侧合并；已推 fork tangqh03/4D-Agent）。
-- **新发现（未修复）**：checker VLM subcall max_tokens=2048 对 8b 话痨回复
-  普遍截断（35/37，其中 8/37 在 CLOSURE 行前被切 → 有效 claim 误拒一轮），
-  影响 64k dev403 全量；处理待定（详见 notes/debug/tqh.md §4.5）。
+**S2.8 结果**：90-subset 56.7%（与 S2.4b 持平），25s/sample（3.6× 快于 S2.6/2.7）。
+全量评测进行中。
+
+**全量对比（403 题）**：
+| 版本 | Micro | Macro | Avg time | 说明 |
+|------|-------|-------|----------|------|
+| S2.4b | **56.3%** | **56.5%** | 91s | 纯观察原语，无 gate |
+| S2.6 r1 | 54.6% | 54.4% | 148s | text-only closure checker |
+| S2.6 r2 | 51.9% | 53.6% | — | 同上，二次跑 |
+| S2.7 | 53.6% | 55.1% | 153s | multimodal closure checker |
+
+结论：closure gate 在全量上未提升总分。S2.4b 纯观察原语是全量最优。
+
+**Pi extensions**(`agent/pi_ext/`)：
+- `vistr_video_tools.ts` — 5 观察工具 + S2.8 context-preserving crop
+- `evidence_closure.ts` — S2.6/S2.7 closure gate（当前不加载）
+- `evidence_ledger.ts` — S2.5 evidence board（当前不加载）
 
 ## Current Focus: S2.6 × qwen3-vl-8b-thinking dev403 全量（2026-08-08，GPU 0/1 TP=2 本地 vLLM :8001）
 
@@ -153,21 +154,20 @@ GPU 0/1、TP=2 的 vLLM 部署，现有 8 卡服务的安全切换门禁，主 a
 
 ## Key Results Summary
 
-| Configuration | Accuracy | Samples |
-|---------------|----------|---------|
-| qwen3-vl-plus baseline | 50.6% | 403 |
-| qwen3-vl-plus via pi S1(纯问答) | 54.6% | 403 |
-| qwen3-vl-plus + V4 tools | 55.6% | 403 |
-| SpatialClaw | 56.6% | 403 |
-| claude-opus-4-6 via pi S1 | 57.1% | 403 |
-| pi S2.4b(全套观察原语) | 56.7% | 90(均匀) |
-| pi S2.5 evidence board(tail/anchor) | 54.4~56.7% | 90(均匀) |
-| **pi S2.6 evidence closure** | **62.2%** | 90(均匀) |
-| qwen3-vl-8b-thinking baseline (vLLM, recovery) | 54.3% | 403 |
-| qwen3-vl-8b-thinking + V4 tools | 47.4% | 107 (partial) |
-| qwen3-vl-8b-thinking + pi agentic (修复后) | 51.4% | 403 |
-| **qwen3-vl-8b-thinking + S2.6 closure gate** | **52.9%** | 403 |
-| qwen3-vl-8b-thinking + SpatialClaw | 48.0% | 150 (10/task 子集) |
+| Configuration | Accuracy | Samples | Avg time |
+|---------------|----------|---------|----------|
+| qwen3-vl-plus baseline | 50.6% | 403 | — |
+| qwen3-vl-plus via pi S1(纯问答) | 54.6% | 403 | — |
+| qwen3-vl-plus + V4 tools | 55.6% | 403 | — |
+| SpatialClaw | 56.6% | 403 | — |
+| claude-opus-4-6 via pi S1 | 57.1% | 403 | — |
+| **pi S2.4b 全量(纯观察原语)** | **56.3% micro / 56.5% macro** | **403** | **91s** |
+| pi S2.6 evidence closure 全量 r1 | 54.6% / 54.4% | 403 | 148s |
+| pi S2.6 evidence closure 全量 r2 | 51.9% / 53.6% | 403 | — |
+| pi S2.7 visual closure 全量 | 53.6% / 55.1% | 403 | 153s |
+| pi S2.8 context crop (90题) | 56.7% | 90 | 25s |
+| qwen3-vl-8b-thinking baseline (vLLM) | 54.3% | 403 | — |
+| qwen3-vl-8b-thinking + S2.6 closure gate | 52.9% | 403 | — |
 
 两模型互补：8b-thinking 擅长预测类 (Soccer +23pp, Golf +12pp)，plus 擅长空间感知 (Passage +19pp, Ego +18pp)。
 

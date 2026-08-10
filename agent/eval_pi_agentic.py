@@ -77,8 +77,8 @@ EXTRA_TOOLS_NOTE = """
 - index_video 工具：获取视频的粗粒度带 caption 时间线（纯文本），用于发现值得看的时刻
 - read_video_sequence 工具：一次查看一个连续时间片段（多帧按时序排列）
 - read_multiframe 工具：一次联合查看若干已选定的证据时刻的帧
-- read_crop 工具：用归一化 bbox（0-1000）放大查看某帧/某图的局部区域（原始分辨率）
-- semantic_crop 工具：用英文文字描述目标（如 "the hand touching the tower"），由 grounding 后端定位并返回高清局部图+定位回执
+- read_crop 工具：用归一化 bbox（0-1000）放大查看局部区域。支持单帧(time_s)或视频段(start_s+end_s)——视频段模式返回 zoomed 视频文件
+- semantic_crop 工具：用英文描述目标区域（如 "the basketball near the hoop"），grounding 后端定位后返回包含周围上下文的局部场景。支持单帧(time_s)或视频段(start_s+end_s)——视频段模式在多个时间点定位目标，计算稳定 ROI，返回 zoomed 视频文件
 - submit_answer 工具：提交最终答案（提供选项原文 + 最关键视觉事实），系统会检查证据闭合"""
 
 
