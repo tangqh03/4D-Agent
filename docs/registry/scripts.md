@@ -47,10 +47,10 @@ Index of all scripts in this project. Each entry documents purpose, usage, input
 
 ### agent/eval_pi_agentic.py
 **Purpose**: pi harness 评测（Stage 2: agentic,带 extension 工具）
-**Usage**: `VISTR_PI_EXTENSION="agent/pi_ext/vistr_video_tools.ts,agent/pi_ext/evidence_closure.ts" python agent/eval_pi_agentic.py [--per-task 6] [--workers 4] [--resume]`
+**Usage**: `VISTR_PI_EXTENSION="agent/pi_ext/vistr_video_tools.ts" python agent/eval_pi_agentic.py [--per-task 6] [--workers 4] [--resume]`
 **Inputs**: benchmark `data.json` + 视频; pi 安装于 `third_party/pi-runtime/`; extensions 通过 `VISTR_PI_EXTENSION` 指定
 **Outputs**: `outputs/predictions/pi_agentic_*.jsonl` 或 `--output` 指定
-**Notes**: 环境变量 `VISTR_PI_PROVIDER`/`VISTR_PI_MODEL` 切换; extension 路径自动转绝对路径; 输出含 `answer_source/no_answer/termination`，S2.6 无 FINAL 时只接受成功 submit，不从 reasoning 猜答案; code map `docs/code_maps/systems/pi_observation_stack.md`
+**Notes**: 环境变量 `VISTR_PI_PROVIDER`/`VISTR_PI_MODEL` 切换; extension 路径自动转绝对路径; S2.8 只加载 video tools 并直接输出 FINAL；S2.6/S2.7 另加 `evidence_closure.ts` 才启用 submit protocol；输出含 `answer_source/no_answer/termination`; code map `docs/code_maps/systems/pi_observation_stack.md`
 
 ### agent/pi_ext/vistr_video_tools.ts
 **Purpose**: pi extension — 观察原语五件套(index_video / read_video_sequence / read_multiframe / read_crop / semantic_crop)
@@ -118,6 +118,13 @@ Index of all scripts in this project. Each entry documents purpose, usage, input
 **Inputs**: 权重 `/mnt/xlab-nas-wm/gaozhe.gz/hf_datasets/grounding-dino-base`
 **Outputs**: HTTP `/health` `/ground` `/annotate`(供 semantic_crop extension 调用)
 **Notes**: extension 禁止自行加载权重;文本 prompt 仅英文(BERT 词表)
+
+### scripts/launch_vllm_qwen3_vl_8b_thinking.py
+**Purpose**: 从 JSON 配置启动本地 OpenAI-compatible qwen3-vl-8b-thinking vLLM 服务
+**Usage**: `/opt/conda/envs/311/bin/python scripts/launch_vllm_qwen3_vl_8b_thinking.py --config configs/vllm_qwen3_vl_8b_thinking_gpu0-3_96k.json --python /opt/conda/envs/311/bin/python [--dry-run]`
+**Inputs**: 本地模型 `/data/Qwen3-VL-8B-Thinking/` + 指定配置
+**Outputs**: `127.0.0.1:8001/v1`，served model `qwen3-vl-8b-thinking`
+**Notes**: S2.8/8b 全量使用 GPU 0–3、TP=4、98304 context 配置；启用 Hermes tool parser 和 Qwen3 reasoning parser
 
 ### scripts/grounding_probe.py
 **Purpose**: semantic_crop vs read_crop 小规模 grounding 对比(5 探针,首发命中率/调用次数)

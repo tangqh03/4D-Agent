@@ -8,6 +8,7 @@ code_paths:
   - agent/eval_pi_agentic.py
 entrypoints:
   - "pi -p -e agent/pi_ext/vistr_video_tools.ts --provider amap-gateway --model qwen3-vl-plus \"...\""
+  - "VISTR_PI_PROVIDER=vllm-local VISTR_PI_MODEL=qwen3-vl-8b-thinking VISTR_PI_EXTENSION=agent/pi_ext/vistr_video_tools.ts python agent/eval_pi_agentic.py --ids 1"
   - "VISTR_PI_EXTENSION=... python agent/eval_pi_agentic.py --per-task 6 --workers 4"
   - "python scripts/perception_service.py --port 7876 --eager"
 last_verified: 2026-08-10
@@ -139,9 +140,11 @@ perception_service:
 | `contextualROI` | 同上 | grounding bbox → context-preserving ROI |
 | `cropVideoSegment` | 同上 | ffmpeg 视频段空间裁剪 → zoomed mp4 |
 | `temporalUnion` | 同上 | 多时间点 bbox 求 temporal union |
+| `segmentPreviewTimes` | 同上 | preview 取首/中/片尾内侧，避免精确 seek 到 EOF |
 | `evidenceClosure` | `agent/pi_ext/evidence_closure.ts` | S2.6/S2.7 closure gate(当前不加载) |
 | `ground()` | `scripts/perception_service.py` | GroundingDINO 推理 + 编号标注图 |
 | `EXTRA_TOOLS_NOTE` | `agent/eval_pi_agentic.py` | user prompt 工具清单 |
+| `_build_prompt` | 同上 | 根据是否加载 evidence closure 选择 FINAL 或 submit protocol |
 | `_select_answer` / `_parse_pi_json` | 同上 | committed answer 优先级、tool details 落盘 |
 
 ## Gotchas
@@ -149,7 +152,9 @@ perception_service:
 - 网关流式 tool-call args 为累积式:pi-ai 需先打补丁 `scripts/patch_pi_cumulative_args.py`(npm 重装后重跑)
 - GroundingDINO 文本仅英文(中文→[UNK])
 - t=duration 抽帧为空 → 全部时间参数经 `clampT(dur-0.1)`
+- 派生 zoomed clip 的最后一张 preview 也必须位于片尾内侧，不能 seek 到精确 duration
 - perception 服务需先起(:7876),extension 只走 HTTP,禁止加载权重
 - thinking subcall 的 `content=null` 是合法形态;reasoning 不能当 committed content
 - zoomed video 写入 agent workspace(当前目录),agent 可对其递归调用工具
 - temporal union 在 grounding 部分失败时仍可用(只需 ≥1 个时间点成功)
+- S2.8 只加载 `vistr_video_tools.ts`，prompt 直接要求 `FINAL:`；只有加载 `evidence_closure.ts` 时才出现 `submit_answer`

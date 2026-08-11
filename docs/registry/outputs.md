@@ -117,6 +117,18 @@ Index of all output directories and artifacts produced by this project.
 **Format**: 同 Stage 2
 **Notes**: context-preserving crop + video segment zoom; 25s/sample（3.6× 快于 S2.6/2.7）;agent 尚未主动使用 video segment 模式
 
+### pi S2.8 × qwen3-vl-8b-thinking vLLM 96k smoke
+**Path**: `outputs/predictions/pi_s28_qwen3-vl-8b-thinking_vllm_gpu0-3_96k_smoke_ids_1_114_229_20260810.jsonl`
+**Produced by**: `VISTR_PI_EXTENSION=agent/pi_ext/vistr_video_tools.ts agent/eval_pi_agentic.py --ids 1,114,229 --workers 1`
+**Format**: Stage 2 JSONL，含完整 tool trace/result details、answer source 和 termination
+**Notes**: 3/3 完成，1/3 accuracy（非门禁），14/14 工具执行、0 tool error、0 provider error、0 no-answer、0 submit_answer；run log `docs/working_logs/runs/2026-08-10_s28_qwen3_vl_8b_96k_smoke.md`
+
+### pi S2.8 × qwen3-vl-8b-thinking dev403 全量（96k）
+**Path**: `outputs/predictions/pi_s28_qwen3-vl-8b-thinking_vllm_gpu0-3_96k_dev403_20260810.jsonl`
+**Produced by**: `VISTR_PI_EXTENSION=agent/pi_ext/vistr_video_tools.ts agent/eval_pi_agentic.py --split dev --workers 3 --timeout 900`
+**Format**: Stage 2 JSONL，含 tool trace/result details、answer_source/no_answer/termination；无 closure 字段（S2.8 不加载 evidence_closure）
+**Notes**: **224/403 = 55.6%**（8b dev403 历史最佳），11117s（27.6s/sample，3.6× 快于 S2.6/2.7）。403/403 唯一 ID、1747/1747 工具执行、0 tool/provider error、0 submit_answer；唯一硬门禁缺口 #191（stop=length 过度思考、0 工具，`pred=null` 未补写）。answer_source final 399 / reasoning_fallback 3 / none 1。对比：S2.6 closure 52.9%、S2.6 anti-bias 51.9%、baseline 54.3%。run log `docs/working_logs/runs/2026-08-10_s28_8b_96k_dev403.md`
+
 ### pi S2.6 bugfix 64k 定向 smoke
 **Path**: `outputs/predictions/pi_s26_fix_smoke_ids_114_118_229_332_863_866_909_20260809.jsonl`
 **Produced by**: `agent/eval_pi_agentic.py --ids 118,229,332,866,909,863,114 --workers 1`

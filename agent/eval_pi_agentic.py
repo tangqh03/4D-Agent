@@ -64,7 +64,7 @@ PROMPT = """你是视频时空推理专家。当前工作目录下有一个源�
 【题目】{question}
 【选项】{options}
 
-要求：分析完成后，调用 submit_answer 工具提交你的答案（提供选项原文和你答案依赖的最关键视觉事实）。{final_instruction}"""
+要求：分析完成后，{answer_instruction}"""
 
 FINAL_INSTRUCTION_WITH_SUBMIT = """\
 submit_answer 会检查你的关键事实是否已被直接视觉观察确认。如果发现证据缺口，你有一次机会去重新观察关键时刻再提交。\
@@ -78,8 +78,23 @@ EXTRA_TOOLS_NOTE = """
 - read_video_sequence 工具：一次查看一个连续时间片段（多帧按时序排列）
 - read_multiframe 工具：一次联合查看若干已选定的证据时刻的帧
 - read_crop 工具：用归一化 bbox（0-1000）放大查看局部区域。支持单帧(time_s)或视频段(start_s+end_s)——视频段模式返回 zoomed 视频文件
-- semantic_crop 工具：用英文描述目标区域（如 "the basketball near the hoop"），grounding 后端定位后返回包含周围上下文的局部场景。支持单帧(time_s)或视频段(start_s+end_s)——视频段模式在多个时间点定位目标，计算稳定 ROI，返回 zoomed 视频文件
-- submit_answer 工具：提交最终答案（提供选项原文 + 最关键视觉事实），系统会检查证据闭合"""
+- semantic_crop 工具：用英文描述目标区域（如 "the basketball near the hoop"），grounding 后端定位后返回包含周围上下文的局部场景。支持单帧(time_s)或视频段(start_s+end_s)——视频段模式在多个时间点定位目标，计算稳定 ROI，返回 zoomed 视频文件"""
+
+
+def _build_prompt(question, options, extension):
+    """Build a prompt whose answer protocol matches the loaded tools."""
+    has_submit = bool(extension and "evidence_closure" in extension)
+    answer_instruction = (
+        "调用 submit_answer 工具提交你的答案（提供选项原文和你答案依赖的最关键视觉事实）。"
+        + FINAL_INSTRUCTION_WITH_SUBMIT
+        if has_submit else FINAL_INSTRUCTION_NO_SUBMIT
+    )
+    return PROMPT.format(
+        question=question,
+        options=" / ".join(options),
+        extra_tools=EXTRA_TOOLS_NOTE if extension else "",
+        answer_instruction=answer_instruction,
+    )
 
 
 TOOL_CALL_RE = re.compile(
@@ -378,11 +393,7 @@ def solve_agentic(sample, timeout=600):
     with tempfile.TemporaryDirectory(prefix="pi_ws_") as ws:
         shutil.copy(video_path, os.path.join(ws, "video.mp4"))
         has_submit = EXTENSION and "evidence_closure" in EXTENSION
-        prompt = PROMPT.format(
-            question=question, options=" / ".join(options),
-            extra_tools=EXTRA_TOOLS_NOTE if EXTENSION else "",
-            final_instruction=FINAL_INSTRUCTION_WITH_SUBMIT if has_submit else FINAL_INSTRUCTION_NO_SUBMIT,
-        )
+        prompt = _build_prompt(question, options, EXTENSION)
         env = agent_env()   # PATH fix (ffmpeg/ffprobe/cv2 on PATH)
         if has_submit:
             env["VISTR_QUESTION"] = f"{question} Options: {' / '.join(options)}"

@@ -18,17 +18,32 @@ last_updated: 2026-08-10
 5. 去掉 evidence_closure（S2.6/S2.7 全量未提升总分，增加 60% 耗时）
 
 **S2.8 结果**：90-subset 56.7%（与 S2.4b 持平），25s/sample（3.6× 快于 S2.6/2.7）。
-全量评测进行中。
+**✅ dev403 全量已完成（2026-08-11 00:49）：224/403 = 55.6%**（8b dev403 历史最佳），
+11117s（27.6s/sample）。输出 `outputs/predictions/pi_s28_qwen3-vl-8b-thinking_vllm_gpu0-3_96k_dev403_20260810.jsonl`。
+唯一硬门禁缺口 #191（stop=length 过度思考、0 工具，`pred=null` 未补写，非 infra）。
+详见 `docs/working_logs/runs/2026-08-10_s28_8b_96k_dev403.md`。
+
+**qwen3-vl-8b-thinking × vLLM 适配完成（2026-08-10）**：复用 GPU 0–3、TP=4、
+96k context 的本地 vLLM `:8001` 和 GPU 6 perception `:7876`。修正无 closure 时
+prompt 仍要求不存在的 `submit_answer`、视频段末帧 preview 精确 seek，以及时段参数
+静默混用；S2.8 的 contextual ROI / temporal union / stable ROI 核心算法不变。
+真实视频段探针通过（semantic crop → H.264 zoomed MP4 → 递归读取 3 帧）；public dev
+IDs 1/114/229 smoke 3/3 完成，14/14 工具真实执行、0 tool/provider error、0 no-answer、
+0 submit_answer，准确率 1/3（非门禁）。全量 dev403 已交接 Claude Code，见
+`docs/working_logs/handoffs/2026-08-10_s28_qwen3_vl_8b_96k_dev403_claude.md`。
 
 **全量对比（403 题）**：
 | 版本 | Micro | Macro | Avg time | 说明 |
 |------|-------|-------|----------|------|
-| S2.4b | **56.3%** | **56.5%** | 91s | 纯观察原语，无 gate |
+| S2.4b | 56.3% | **56.5%** | 91s | 纯观察原语，无 gate |
 | S2.6 r1 | 54.6% | 54.4% | 148s | text-only closure checker |
 | S2.6 r2 | 51.9% | 53.6% | — | 同上，二次跑 |
 | S2.7 | 53.6% | 55.1% | 153s | multimodal closure checker |
+| **S2.8（8b，96k）** | **55.6%** | — | 27.6s | context crop，无 gate |
 
-结论：closure gate 在全量上未提升总分。S2.4b 纯观察原语是全量最优。
+结论：closure gate 在全量上未提升总分。S2.8 context-preserving crop 在 8b 全量
+（55.6%）上超过 S2.4b 全量的 plus 路线（56.3%，不同模型）之外，成为 8b 全量最优，
+且速度最快（27.6s/sample）。
 
 **Pi extensions**(`agent/pi_ext/`)：
 - `vistr_video_tools.ts` — 5 观察工具 + S2.8 context-preserving crop

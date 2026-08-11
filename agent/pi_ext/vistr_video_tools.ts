@@ -41,6 +41,13 @@ function clampT(t: number, dur: number): number {
 	return Math.max(0, Math.min(t, Math.max(0, dur - 0.1)));
 }
 
+// Seeking at exactly the end of a derived clip can yield no frame. Keep the
+// final preview just inside the clip while retaining start/middle/end coverage.
+function segmentPreviewTimes(duration: number): number[] {
+	const endMargin = Math.min(0.1, duration / 10);
+	return [0, duration / 2, Math.max(0, duration - endMargin)];
+}
+
 // ── Subcall reply parsing: thinking goes to its own slot ──────────────
 // The gateway model may be a thinking model (qwen3-vl-8b-thinking): vLLM's
 // reasoning parser returns the committed answer in `content` and the
@@ -74,7 +81,7 @@ function thinkingBlock(reasoning: string, label: string): Block | null {
 
 // Test surface (behavior-neutral named export; pi's loader only consumes
 // the default export).
-export { clampT, parseChatReply, thinkingBlock };
+export { clampT, segmentPreviewTimes, parseChatReply, thinkingBlock };
 
 async function grabFrame(video: string, t: number, outDir: string, i: number): Promise<string> {
 	const out = join(outDir, `f_${i}.jpg`);
@@ -393,10 +400,27 @@ export default function vistrVideoTools(pi: ExtensionAPI) {
 		async execute(_id, params: { path: string; target: string; time_s?: number; start_s?: number; end_s?: number }) {
 			const src = resolve(params.path);
 			const isVideo = /\.(mp4|avi|mov|mkv|webm)$/i.test(src);
-			const isVideoSegment = isVideo && params.start_s !== undefined && params.end_s !== undefined;
+			const hasStart = params.start_s !== undefined;
+			const hasEnd = params.end_s !== undefined;
+			const hasSegment = hasStart && hasEnd;
+			const isVideoSegment = isVideo && hasSegment;
 
-			if (!isVideo && params.time_s === undefined && params.start_s === undefined) {
-				// Image mode: need at least time_s for grounding (or just ground directly)
+			for (const [name, value] of [["time_s", params.time_s], ["start_s", params.start_s], ["end_s", params.end_s]] as const) {
+				if (value !== undefined && !Number.isFinite(value)) {
+					return { content: [{ type: "text", text: `Error: ${name} must be a finite number.` }], details: {} };
+				}
+			}
+			if (hasStart !== hasEnd) {
+				return { content: [{ type: "text", text: "Error: start_s and end_s must be provided together." }], details: {} };
+			}
+			if (hasSegment && params.time_s !== undefined) {
+				return { content: [{ type: "text", text: "Error: use either time_s or start_s+end_s, not both." }], details: {} };
+			}
+			if (hasSegment && params.start_s! > params.end_s!) {
+				return { content: [{ type: "text", text: "Error: start_s must be less than end_s." }], details: {} };
+			}
+			if (!isVideo && hasSegment) {
+				return { content: [{ type: "text", text: "Error: start_s+end_s are only valid for video paths." }], details: {} };
 			}
 			if (isVideo && !isVideoSegment && params.time_s === undefined) {
 				return { content: [{ type: "text", text:
@@ -452,8 +476,7 @@ export default function vistrVideoTools(pi: ExtensionAPI) {
 					await copyFile(zoomedPath, workspacePath);
 
 					// Generate preview frames from the zoomed video
-					const previewTimes = [0, 0.5, 1.0].map((f) => f * (segEnd - segStart));
-					const previewDir = join(dir, "preview");
+					const previewTimes = segmentPreviewTimes(segEnd - segStart);
 					const previewBlocks: Block[] = [];
 					for (let i = 0; i < previewTimes.length; i++) {
 						const pf = join(dir, `preview_${i}.jpg`);
@@ -606,7 +629,10 @@ export default function vistrVideoTools(pi: ExtensionAPI) {
 		async execute(_id, params: { path: string; bbox: number[]; time_s?: number; start_s?: number; end_s?: number }) {
 			const src = resolve(params.path);
 			const isVideo = /\.(mp4|avi|mov|mkv|webm)$/i.test(src);
-			const isVideoSegment = isVideo && params.start_s !== undefined && params.end_s !== undefined;
+			const hasStart = params.start_s !== undefined;
+			const hasEnd = params.end_s !== undefined;
+			const hasSegment = hasStart && hasEnd;
+			const isVideoSegment = isVideo && hasSegment;
 
 			if (!Array.isArray(params.bbox) || params.bbox.length !== 4 ||
 				!params.bbox.every((v) => typeof v === "number" && Number.isFinite(v))) {
@@ -617,6 +643,23 @@ export default function vistrVideoTools(pi: ExtensionAPI) {
 					"Error: bbox appears to use a 0-1 scale, but read_crop requires " +
 					"[x0, y0, x1, y1] on a 0-1000 scale. Multiply normalized " +
 					"coordinates by 1000, or use semantic_crop to re-localize the target." }], details: {} };
+			}
+			for (const [name, value] of [["time_s", params.time_s], ["start_s", params.start_s], ["end_s", params.end_s]] as const) {
+				if (value !== undefined && !Number.isFinite(value)) {
+					return { content: [{ type: "text", text: `Error: ${name} must be a finite number.` }], details: {} };
+				}
+			}
+			if (hasStart !== hasEnd) {
+				return { content: [{ type: "text", text: "Error: start_s and end_s must be provided together." }], details: {} };
+			}
+			if (hasSegment && params.time_s !== undefined) {
+				return { content: [{ type: "text", text: "Error: use either time_s or start_s+end_s, not both." }], details: {} };
+			}
+			if (hasSegment && params.start_s! > params.end_s!) {
+				return { content: [{ type: "text", text: "Error: start_s must be less than end_s." }], details: {} };
+			}
+			if (!isVideo && hasSegment) {
+				return { content: [{ type: "text", text: "Error: start_s+end_s are only valid for video paths." }], details: {} };
 			}
 
 			const dir = await mkdtemp(join(tmpdir(), "vistr_crop_"));
@@ -634,7 +677,7 @@ export default function vistrVideoTools(pi: ExtensionAPI) {
 				const w = Math.round(((nb[2] - nb[0]) / 1000) * fw);
 				const h = Math.round(((nb[3] - nb[1]) / 1000) * fh);
 				if (w <= 4 || h <= 4) {
-					return { content: [{ type: "text", text: `Error: bbox too small after mapping (${w}×${h}px).` }], details: {} };
+					return { content: [{ type: "text", text: `Error: bbox too small or inverted after mapping (${w}×${h}px).` }], details: {} };
 				}
 
 				if (isVideoSegment) {
@@ -654,7 +697,7 @@ export default function vistrVideoTools(pi: ExtensionAPI) {
 					await copyFile(zoomedPath, workspacePath);
 
 					// Preview frames
-					const previewTimes = [0, 0.5, 1.0].map((f) => f * (segEnd - segStart));
+					const previewTimes = segmentPreviewTimes(segEnd - segStart);
 					const previewBlocks: Block[] = [];
 					for (let i = 0; i < previewTimes.length; i++) {
 						const pf = join(dir, `preview_${i}.jpg`);

@@ -14,6 +14,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from agent.eval_pi_agentic import (
+    _build_prompt,
     _parse_pi_json,
     _repair_swallowed_tool_calls,
     _select_answer,
@@ -275,6 +276,23 @@ def t_select_non_s26_keeps_reasoning_fallback():
                           has_submit=False) == ("No", "reasoning_fallback")
 
 
+def t_build_prompt_s28_has_no_submit_tool():
+    prompt = _build_prompt("Question?", ["Yes", "No"],
+                           "agent/pi_ext/vistr_video_tools.ts")
+    assert "semantic_crop 工具" in prompt
+    assert "submit_answer" not in prompt
+    assert "FINAL: <选项原文之一>" in prompt
+
+
+def t_build_prompt_closure_keeps_submit_protocol():
+    prompt = _build_prompt(
+        "Question?", ["Yes", "No"],
+        "agent/pi_ext/vistr_video_tools.ts,agent/pi_ext/evidence_closure.ts")
+    assert "调用 submit_answer 工具提交你的答案" in prompt
+    assert "submit_answer 会检查" in prompt
+    assert "FINAL: <选项原文之一>" in prompt
+
+
 if __name__ == "__main__":
     print("test_eval_pi_parse.py")
     for f in [t_repair_full_form_nested, t_repair_full_form_with_braces_in_args,
@@ -293,7 +311,9 @@ if __name__ == "__main__":
               t_select_s26_final_overrides_accepted_submit,
               t_select_s26_uses_last_accepted_submit_not_reasoning,
               t_select_s26_rejected_only_is_no_answer,
-              t_select_non_s26_keeps_reasoning_fallback]:
+              t_select_non_s26_keeps_reasoning_fallback,
+              t_build_prompt_s28_has_no_submit_tool,
+              t_build_prompt_closure_keeps_submit_protocol]:
         check(f.__name__, f)
     if FAILURES:
         print(f"\n{len(FAILURES)} failures")

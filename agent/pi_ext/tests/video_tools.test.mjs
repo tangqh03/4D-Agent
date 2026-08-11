@@ -7,6 +7,8 @@
  * and error paths.
  */
 import assert from "node:assert/strict";
+import { unlink } from "node:fs/promises";
+import { resolve } from "node:path";
 import { test, loadExtension, createMockAPI, installFetch, testVideo, testImage, countImages, textBlocks } from "./harness.mjs";
 
 async function makeTools(routes) {
@@ -152,7 +154,7 @@ test("read_crop: malformed bbox -> friendly error", async () => {
 test("read_crop: video without time_s -> friendly error", async () => {
 	const { tools } = await makeTools({});
 	const r = await tools.read_crop({ path: testVideo(), bbox: [100, 100, 500, 500] });
-	assert.ok(textBlocks(r.content).includes("time_s is required for video paths"));
+	assert.ok(textBlocks(r.content).includes("provide time_s"));
 });
 
 test("read_crop: image path works without time_s", async () => {
@@ -161,6 +163,35 @@ test("read_crop: image path works without time_s", async () => {
 	assert.equal(countImages(r.content), 1);
 	assert.deepEqual(r.details.pixels, [32, 24, 160, 120]);
 	assert.deepEqual(r.details.source, [320, 240]);
+});
+
+test("read_crop: video segment -> zoomed mp4 with valid previews and recursive read", async () => {
+	const { tools } = await makeTools({});
+	const r = await tools.read_crop({
+		path: testVideo(), bbox: [200, 200, 800, 800], start_s: 0.2, end_s: 1.8,
+	});
+	const out = resolve(r.details.zoomed_video);
+	try {
+		assert.equal(r.details.mode, "video_segment");
+		assert.equal(countImages(r.content), 3);
+		assert.deepEqual(r.details.pixels, [64, 48, 256, 192]);
+		const nested = await tools.read_video_sequence({
+			path: out, start_s: 0, end_s: 1.5, num_frames: 3,
+		});
+		assert.equal(countImages(nested.content), 3);
+	} finally {
+		await unlink(out).catch(() => {});
+	}
+});
+
+test("read_crop: temporal parameters must be paired, ordered, and exclusive", async () => {
+	const { tools } = await makeTools({});
+	let r = await tools.read_crop({ path: testVideo(), bbox: [100, 100, 500, 500], start_s: 0.2 });
+	assert.ok(textBlocks(r.content).includes("provided together"));
+	r = await tools.read_crop({ path: testVideo(), bbox: [100, 100, 500, 500], start_s: 1.0, end_s: 0.5 });
+	assert.ok(textBlocks(r.content).includes("start_s must be less than end_s"));
+	r = await tools.read_crop({ path: testVideo(), bbox: [100, 100, 500, 500], time_s: 0.5, start_s: 0.2, end_s: 1.0 });
+	assert.ok(textBlocks(r.content).includes("not both"));
 });
 
 // ── semantic_crop ────────────────────────────────────────────────────
@@ -185,7 +216,7 @@ test("semantic_crop: single candidate -> no selection subcall, receipt + crop", 
 	assert.equal(countImages(r.content), 2); // receipt + crop
 	assert.equal(r.details.selection_mode, "single");
 	assert.equal(r.details.grounding_bbox.join(","), "100,50,200,150");
-	assert.deepEqual(r.details.crop_bbox, [85, 35, 215, 165]); // 15% margin
+	assert.deepEqual(r.details.crop_bbox, [40, 0, 260, 220]); // S2.8 contextual ROI
 	assert.equal(r.details.frame_size.join(","), "320,240");
 	// no candidate-selection chat call
 	assert.ok(!stub.calls.some((c) => c.url.includes("/chat/completions")),
@@ -223,7 +254,7 @@ test("semantic_crop: video without time_s -> friendly error", async () => {
 	const { tools } = await makeTools({ ground: () => SINGLE_CAND });
 	const r = await tools.semantic_crop({ path: testVideo(), target: "the ball" });
 	assert.equal(countImages(r.content), 0);
-	assert.ok(textBlocks(r.content).includes("time_s is required for video paths"));
+	assert.ok(textBlocks(r.content).includes("provide either time_s"));
 });
 
 test("semantic_crop: video + time_s works end-to-end", async () => {
@@ -240,6 +271,37 @@ test("semantic_crop: details report the clamped frame timestamp", async () => {
 	const r = await tools.semantic_crop({ path: testVideo(), target: "the ball", time_s: 99 });
 	assert.equal(r.details.time_s, 1.9);
 	assert.ok(textBlocks(r.content).includes("@ t=1.90s"));
+});
+
+test("semantic_crop: video segment -> three groundings, stable ROI, previews, recursive read", async () => {
+	const { tools, stub } = await makeTools({ ground: () => SINGLE_CAND });
+	const r = await tools.semantic_crop({
+		path: testVideo(), target: "the ball", start_s: 0.2, end_s: 1.8,
+	});
+	const out = resolve(r.details.zoomed_video);
+	try {
+		assert.equal(r.details.mode, "video_segment");
+		assert.equal(r.details.groundings_succeeded, 3);
+		assert.equal(stub.calls.filter((c) => c.url.includes("/ground")).length, 3);
+		assert.deepEqual(r.details.stable_roi, [40, 0, 260, 220]);
+		assert.equal(countImages(r.content), 3);
+		const nested = await tools.read_video_sequence({
+			path: out, start_s: 0, end_s: 1.5, num_frames: 3,
+		});
+		assert.equal(countImages(nested.content), 3);
+	} finally {
+		await unlink(out).catch(() => {});
+	}
+});
+
+test("semantic_crop: temporal parameters must be paired, ordered, and exclusive", async () => {
+	const { tools } = await makeTools({ ground: () => SINGLE_CAND });
+	let r = await tools.semantic_crop({ path: testVideo(), target: "the ball", start_s: 0.2 });
+	assert.ok(textBlocks(r.content).includes("provided together"));
+	r = await tools.semantic_crop({ path: testVideo(), target: "the ball", start_s: 1.0, end_s: 0.5 });
+	assert.ok(textBlocks(r.content).includes("start_s must be less than end_s"));
+	r = await tools.semantic_crop({ path: testVideo(), target: "the ball", time_s: 0.5, start_s: 0.2, end_s: 1.0 });
+	assert.ok(textBlocks(r.content).includes("not both"));
 });
 
 test("semantic_crop: VLM select replies garbage -> falls back to first candidate", async () => {

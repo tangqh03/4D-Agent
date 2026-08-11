@@ -12,7 +12,7 @@ const videoTools = await loadExtension(
 	"/workspace/Spatial-Agent/4D-Agent/agent/pi_ext/vistr_video_tools.ts");
 
 const { timeSubset, timeStrict, spaceSubset, spaceStrict, fmtTime, fmtSpace, mapEvent } = closure;
-const { clampT, parseChatReply, thinkingBlock } = videoTools;
+const { clampT, segmentPreviewTimes, parseChatReply, thinkingBlock } = videoTools;
 
 // ── timeSubset ───────────────────────────────────────────────────────
 test("timeSubset: point inside interval", () => {
@@ -279,4 +279,12 @@ test("clampT: clamps to [0, dur-0.1]", () => {
 	assert.equal(clampT(5, 10), 5);
 	assert.equal(clampT(0, 0), 0);
 	assert.equal(clampT(2, 0), 0);
+});
+
+test("segmentPreviewTimes: final preview stays inside derived clip", () => {
+	assert.deepEqual(segmentPreviewTimes(2), [0, 1, 1.9]);
+	const short = segmentPreviewTimes(0.1);
+	assert.deepEqual(short.slice(0, 2), [0, 0.05]);
+	assert.ok(Math.abs(short[2] - 0.09) < 1e-12);
+	assert.ok(segmentPreviewTimes(2).every((t) => t >= 0 && t < 2));
 });
