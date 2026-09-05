@@ -3,6 +3,7 @@ agent/llm_keys.local.json
 .env
 .env.*
 !.env.example
+!.env.gpt55.example
 
 # Benchmark data (large, download separately)
 data/
@@ -14,7 +15,11 @@ outputs/
 references/
 
 # External model weights
-third_party/
+third_party/*
+!third_party/pi-runtime/
+third_party/pi-runtime/*
+!third_party/pi-runtime/package.json
+!third_party/pi-runtime/package-lock.json
 models/
 *.pt
 
@@ -25,6 +30,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.venv/
 
 # Claude Code session data
 .claude/

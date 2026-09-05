@@ -1,0 +1,14 @@
+version: 1
+sample_count: 100
+sample_seed: 43
+split_seed: 43
+split_ratio: "2:1:7"
+
+integration:
+  skillopt_root: ../../../SkillOpt
+  expected_commit: db46cd9ae7ce12f1dbd73c945185816aa738751d
+
+vistr_data: ../../data/benchmarks/ViSTR-Bench-Public/data.json
+docvqa_parquet_dir: ../../data/benchmarks/DocVQA/DocVQA
+docvqa_manifest_dir: ../../../SkillOpt/data/docvqa_id_split
+output_dir: ../../data/skillopt_comparison/seed43

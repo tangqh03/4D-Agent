@@ -1,0 +1,31 @@
+_base_: ../../../SkillOpt/configs/docvqa/default.yaml
+
+integration:
+  skillopt_root: ../../../SkillOpt
+  expected_commit: db46cd9ae7ce12f1dbd73c945185816aa738751d
+  agent_config: ../agent/s2_8_gpt55.yaml
+
+dataset:
+  id_file: ../../data/skillopt_comparison/seed43/vistr_ids.json
+
+model:
+  backend: azure_openai
+  optimizer: inherit_policy
+  target: inherit_policy
+  optimizer_backend: openai_chat
+  target_backend: openai_chat
+  reasoning_effort: medium
+
+train:
+  batch_size: 5
+  seed: 43
+
+env:
+  name: vistr
+  skill_init: ../../skills/s2_8_initial.md
+  split_mode: ratio
+  split_ratio: "2:1:7"
+  split_seed: 43
+  split_output_dir: ""
+  data_path: ""
+  out_root: ../../outputs/skillopt/comparison_seed43_gpt55/vistr

@@ -27,6 +27,18 @@ Index of all output directories and artifacts produced by this project.
 **Format**: `<run_id>/manifest.json + results.jsonl + <item_id>/attempt-N/{Pi JSONL, Pi HTML, skill.md, target_user_prompt.txt, conversation.json, images/}`
 **Notes**: 每条 Pi session 都用原生 exporter 渲染；conversation 以相对路径引用从 session base64 解码的图片；目录默认 gitignored
 
+### SkillOpt ViSTR training outputs
+**Path**: SkillOpt YAML `env.out_root`（默认 `outputs/skillopt/vistr_docvqa/`；smoke 使用独立的 `vistr_docvqa_smoke/`）
+**Produced by**: `python -m agent.skillopt`
+**Format**: upstream SkillOpt `config.json`、`runtime_state.json`、`history.json`、`best_skill.md`、`skills/`、`steps/`、slow/meta outputs、generated splits，以及 `predictions/<id>/` 轨迹投影
+**Notes**: 原生 Pi JSONL/HTML/图片仍在 agent YAML 的 `artifacts.trajectory_root`；投影用 `source_trajectory.json` 关联原生文件
+
+### SkillOpt cross-benchmark comparison
+**Path**: DeepSeek pipeline smoke `outputs/skillopt/comparison_seed43/`；Fengyuan GPT formal run `outputs/skillopt/comparison_seed43_gpt55/{vistr,docvqa,report}/`
+**Produced by**: 两个 comparison training YAML 与 `agent.skillopt.compare_runs`
+**Format**: 各条件的原生 SkillOpt artifacts；报告包含 `comparison.json` 和 `comparison.md`
+**Notes**: 正式配置各有16个Fast Update Steps；最终报告必须使用 `--expected-steps 16`；Effective Update只计严格validation gate接受，slow/meta action单列
+
 ### Prediction results
 **Path**: `outputs/predictions/`
 **Produced by**: agent 评测管线（规划中）；mock 数据由 `visualize_results.py --demo` 生成

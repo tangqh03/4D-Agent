@@ -160,6 +160,20 @@ class ConfigTests(unittest.TestCase):
         self.assertNotIn("maxTokens", model)
         self.assertEqual(rendered["providers"]["primary"]["apiKey"], "dotenv-secret")
 
+    def test_thinking_level_is_strict_and_requires_reasoning(self):
+        raw = yaml.safe_load(self.fx.config_path.read_text())
+        raw["models"]["policy"]["reasoning"] = False
+        raw["models"]["policy"]["thinking_level"] = "medium"
+        self.fx.config_path.write_text(yaml.safe_dump(raw, sort_keys=False))
+        with self.assertRaisesRegex(ValueError, "requires reasoning=true"):
+            AgentConfig.from_yaml(self.fx.config_path)
+
+        raw["models"]["policy"]["reasoning"] = True
+        raw["models"]["policy"]["thinking_level"] = "extreme"
+        self.fx.config_path.write_text(yaml.safe_dump(raw, sort_keys=False))
+        with self.assertRaisesRegex(ValueError, "thinking_level is invalid"):
+            AgentConfig.from_yaml(self.fx.config_path)
+
 
 class AdapterTests(unittest.TestCase):
     def setUp(self):
@@ -194,6 +208,20 @@ class RunnerTests(unittest.TestCase):
         self.assertIsNone(re.search(r"[\u4e00-\u9fff]", rendered))
         self.assertIn("Question: Did it move?", rendered)
         self.assertIn("<answer>exact option text</answer>", rendered)
+
+    def test_configured_thinking_level_reaches_pi_and_observer(self):
+        raw = yaml.safe_load(self.fx.config_path.read_text())
+        raw["models"]["policy"]["thinking_level"] = "medium"
+        self.fx.config_path.write_text(yaml.safe_dump(raw, sort_keys=False))
+        config = AgentConfig.from_yaml(self.fx.config_path)
+        runner = AgentRunner(config)
+        command = runner._pi_command(
+            Path("/tmp/a"), "skill", "prompt", "run", "item", 1
+        )
+        self.assertEqual(command[command.index("--thinking") + 1], "medium")
+        env = {}
+        runner._inject_observer_env(env)
+        self.assertEqual(env["VISTR_OBSERVER_REASONING_EFFORT"], "medium")
 
     def test_answer_tag_takes_priority_and_supports_multiline_content(self):
         self.assertEqual(
@@ -238,6 +266,9 @@ class RunnerTests(unittest.TestCase):
         conversation = json.loads(Path(record.conversation_path).read_text())
         tool = next(event for event in conversation if event.get("type") == "tool_call")
         self.assertIn("[image] images/", tool["observation"])
+        self.assertEqual(tool["obs"], tool["observation"])
+        self.assertIn("read_video_sequence", tool["cmd"])
+        self.assertIn('"start_s": 0', tool["cmd"])
         self.assertEqual(conversation[-1]["role"], "system")
         self.assertIn("[EVALUATION RESULT]", conversation[-1]["content"])
         self.assertIn("--append-system-prompt", runner._pi_command(

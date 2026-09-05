@@ -23,11 +23,32 @@ Index of all datasets and data sources used in this project.
 ---
 
 ### ViSTR-Bench (public split)
-**Path**: `data/benchmarks/ViSTR-Bench-Public/` → 软链至 `/mnt/xlab-nas-wm/gaozhe.gz/hf_datasets/ViSTR-Bench-Public/`
+**Path**: `data/benchmarks/ViSTR-Bench-Public/`
 **Format**: `data.json`（670 条：id / dataset / dimension / task / **direct_prompting** / **manual_cot_prompting** / video 相对路径 / answer / options）+ `data/<Dimension>/<Task>/<Dataset>/*.mp4`
-**Size**: 670 QA pairs，2.7GB，视频已校验 0 缺失（h264，典型 1920×1080@30fps，数秒级片段）
+**Size**: 670 QA pairs、652 个原始 MP4、约2.63GiB；`.frame_cache` 不属于原始数据且可重建
 **Used by**: agent 评测管线（规划中）、`visualize_results.py`
-**Notes**: 任务/维度名为下划线格式（如 `Basketball_Shot` / `Outcome_Prediction`）；每题自带官方 Manual CoT 模板；public split 的 Chance(Frequency)=**52.7%**（全集 57.9%）；私有 held-out 集禁止调参。详见 `docs/knowledge/vistr_bench.md`
+**Notes**: 来源 `homothetic/ViSTR-Bench-Public`，handover 固定 revision `d87a003751e618304ab03743658e8e2f96bb0ae5`；任务/维度名为下划线格式；public split Chance(Frequency)=**52.7%**；私有 held-out 禁止调参。详见 `docs/knowledge/vistr_bench.md`
+
+### ViSTR SkillOpt ID pool and generated splits
+**Path**: `configs/skillopt/vistr_public_ids.json`；运行时物化到 `<SkillOpt out_root>/_generated_splits/`
+**Format**: 用户 ID 池为 JSON string array；生成目录含 `train/val/test/items.json` 和 `split_manifest.json`
+**Size**: 默认选择全部 670 道 Public 题；`2:1:7`、seed 42 生成 134/67/469
+**Used by**: `python -m agent.skillopt`
+**Notes**: 使用 SkillOpt 原生 ratio splitter；manifest 绑定 ID 池、data.json、ratio、seed 与 SkillOpt commit；不包含 private held-out 数据
+
+### SkillOpt ViSTR/DocVQA 100-item comparison
+**Path**: `data/skillopt_comparison/seed43/`（由配置确定性生成，gitignored）
+**Format**: `comparison_manifest.json`、`vistr_ids.json`、DocVQA `splits/{train,val,test}/items.csv` 和 `images/`
+**Size**: 每个 benchmark 100题，均为20 train / 10 val / 70 test；当前 DocVQA 物化约71MB
+**Used by**: `configs/skillopt/{vistr,docvqa}_comparison_100*.yaml`
+**Notes**: seed43；ViSTR覆盖15/15 tasks且全部二选；DocVQA来自SkillOpt发布的534-ID validation池，100张图片互异且均有答案；DocVQA CSV 含目标机绝对图片路径，换机器必须重新物化
+
+### DocVQA validation source for SkillOpt pilot
+**Path**: `data/benchmarks/DocVQA/DocVQA/validation-*.parquet`
+**Format**: Hugging Face parquet，6 shards、5,349条含 gold answers 的 validation records
+**Size**: 约1.0GiB；train/test/InfographicVQA 不用于当前 pilot
+**Used by**: `agent.skillopt.prepare_comparison`
+**Notes**: `lmms-lab/DocVQA` revision `539088ef8a8ada01ac8e2e6d4e372586748a265e`；抽样候选由固定 SkillOpt checkout 的534-ID manifest定义
 
 ### ViSTR-Bench paper
 **Path**: `references/ViSTR-Bench.pdf`

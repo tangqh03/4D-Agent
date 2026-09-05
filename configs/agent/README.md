@@ -151,6 +151,47 @@ The Observer's `reasoning` flag describes the model to Pi. The fixed Observer
 subcalls choose their own small output budgets; the DeepSeek-host-specific
 thinking override is applied by the extension.
 
+## OpenAI GPT-5.5 handover configuration
+
+`s2_8_gpt55.yaml` is the clean-machine profile for Fengyuan's experiment. It
+uses the official OpenAI endpoint, GPT-5.5, and medium reasoning for the Pi
+Policy and inherited Observer:
+
+```yaml
+providers:
+  openai:
+    api: openai-completions
+    base_url_env: POLICY_API_BASE_URL
+    api_key_env: POLICY_API_KEY
+
+models:
+  policy:
+    provider: openai
+    id: gpt-5.5
+    reasoning: true
+    thinking_level: medium
+    context_window: 1050000
+    max_tokens: 65536
+  observer:
+    inherit: policy
+```
+
+Create the untracked dotenv with:
+
+```bash
+cp .env.gpt55.example .env.gpt55
+```
+
+The OpenAI observer path sends `max_completion_tokens` and
+`reasoning_effort: medium`, and omits `temperature`. SkillOpt uses its native
+`openai_chat` backend with the same model and reasoning setting. DeepSeek and
+OpenRouter retain their existing request shapes.
+
+OpenAI documents GPT-5.5 as supporting image input, Chat Completions, function
+calling, medium reasoning, a 1,050,000-token context window, and up to 128,000
+output tokens:
+<https://developers.openai.com/api/docs/models/gpt-5.5>.
+
 ## Field reference
 
 ### Top level
@@ -187,6 +228,7 @@ examining the URL.
 | `id` | Exact model ID sent to the provider. |
 | `name` | Human-readable name written into Pi's temporary model catalog. |
 | `reasoning` | Marks the model as reasoning-capable for Pi's Policy path. |
+| `thinking_level` | Optional Pi reasoning level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. The runtime passes it through `--thinking`; a non-empty value requires `reasoning: true`. |
 | `context_window` | Total model context window in tokens. `-1` delegates the value to Pi defaults. |
 | `max_tokens` | Maximum Policy output tokens per request. `-1` delegates to Pi defaults. This does not control Observer subcalls. |
 | `inherit: policy` | Observer-only shorthand that reuses the complete Policy model definition and connection. |

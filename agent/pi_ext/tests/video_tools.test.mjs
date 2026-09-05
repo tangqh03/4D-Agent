@@ -7,16 +7,24 @@
  * and error paths.
  */
 import assert from "node:assert/strict";
-import { test, loadExtension, createMockAPI, installFetch, testVideo, testImage, countImages, textBlocks } from "./harness.mjs";
+import {
+	test, loadExtension, createMockAPI, installFetch,
+	testVideo, testImage, countImages, textBlocks, REPO_ROOT,
+} from "./harness.mjs";
 
-async function makeTools(routes, observerBaseUrl = "http://observer.test") {
+async function makeTools(
+	routes,
+	observerBaseUrl = "http://observer.test",
+	reasoningEffort = "",
+) {
 	process.env.VISTR_OBSERVER_BASE_URL = observerBaseUrl;
 	process.env.VISTR_OBSERVER_API_KEY = "test-key";
 	process.env.VISTR_OBSERVER_MODEL = "test-vlm";
+	process.env.VISTR_OBSERVER_REASONING_EFFORT = reasoningEffort;
 	process.env.VISTR_OBSERVER_HEADERS_JSON = '{"x-observer-test":"configured"}';
 	const mock = createMockAPI();
 	const stub = installFetch(routes);
-	(await loadExtension("/workspace/Spatial-Agent/4D-Agent/agent/pi_ext/vistr_video_tools.ts")).default(mock.api);
+	(await loadExtension(`${REPO_ROOT}/agent/pi_ext/vistr_video_tools.ts`)).default(mock.api);
 	const tools = {};
 	for (const name of ["index_video", "read_video_sequence", "read_multiframe", "read_crop", "semantic_crop"]) {
 		const t = mock.tools.get(name);
@@ -318,6 +326,25 @@ test("OpenRouter observer subcalls keep their existing request shape", async () 
 	assert.ok(call.url.startsWith("https://openrouter.ai/api/v1/"));
 	assert.equal(call.body.thinking, undefined,
 		"OpenRouter must not receive the DeepSeek-specific thinking field");
+});
+
+test("OpenAI observer subcalls use GPT reasoning request fields", async () => {
+	const { tools, stub } = await makeTools({
+		caption: () => "t=0.00s: nothing\n",
+		ground: () => TWO_CAND,
+		select: () => "2",
+	}, "https://api.openai.com/v1", "medium");
+	await tools.index_video({ path: testVideo() });
+	await tools.semantic_crop({ path: testImage(), target: "the ball" });
+	const calls = stub.calls.filter((c) => c.url.includes("/chat/completions"));
+	assert.equal(calls.length, 2);
+	assert.deepEqual(calls.map((call) => call.body.max_completion_tokens), [4096, 1024]);
+	for (const call of calls) {
+		assert.equal(call.body.reasoning_effort, "medium");
+		assert.equal(call.body.max_tokens, undefined);
+		assert.equal(call.body.temperature, undefined);
+		assert.equal(call.body.thinking, undefined);
+	}
 });
 
 test("semantic_crop: selection content null (thinking-only reply) -> friendly error, no crash, no silent pick", async () => {

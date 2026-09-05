@@ -69,6 +69,8 @@ Reference material loaded on demand.
 | `knowledge:pi-harness` | pi harness 数据流/工作流刻画(mermaid):架构、agent loop、S1/S2 评测链路、兼容坑 | `docs/knowledge/pi_harness.md` |
 | `knowledge:configurable-runtime` | 当前 S2.8 Python API、YAML/.env、managed perception 与轨迹格式 | `docs/agent/configurable_runtime.md` |
 | `knowledge:s28-config` | `s2_8.yaml` 逐字段说明与 DeepSeek/OpenRouter 配置配方 | `configs/agent/README.md` |
+| `knowledge:skillopt-vistr` | 原生 SkillOpt DocVQA 配方、ViSTR ID ratio split 与训练入口 | `configs/skillopt/README.md` |
+| `knowledge:fengyuan-gpt55-handover` | 全新 NVIDIA 机器安装、GPT-5.5 双基准 pilot、失败边界与验收清单 | `docs/working_logs/handovers/2026-09-05_fengyuan_gpt55_skillopt_pilot_zh.md`（[English](../working_logs/handovers/2026-09-05_fengyuan_gpt55_skillopt_pilot.md)） |
 
 ## ADRs
 
@@ -77,6 +79,8 @@ Reference material loaded on demand.
 | `adr:tool-augmented-arch` | Agent 系统架构：工具增强 + 证据显式化 | `docs/adr/2026-07-31_tool_augmented_agent_architecture.md` |
 | `adr:s26-64k-commit` | S2.6 使用 64k 对齐窗口与 committed-answer 恢复 | `docs/adr/2026-08-09_s26_64k_context_and_committed_answer.md` |
 | `adr:configurable-s28-runtime` | YAML/.env 自包含 S2.8 runtime + 可进化 Skill + 原生轨迹 | `docs/adr/2026-09-05_configurable_s28_runtime.md` |
+| `adr:native-skillopt-vistr` | 固定上游 SkillOpt commit，复用 DocVQA 训练配方更新 S2.8 Skill | `docs/adr/2026-09-05_native_skillopt_vistr_training.md` |
+| `adr:skillopt-cross-benchmark-pilot` | 100-item ViSTR/DocVQA 同预算单种子对比与 Effective Update 口径 | `docs/adr/2026-09-05_skillopt_cross_benchmark_pilot.md` |
 
 ## Usage in plans
 

@@ -29,8 +29,39 @@ Index of all scripts in this project. Each entry documents purpose, usage, input
 **Usage**: `with AgentRunner.from_yaml("configs/agent/s2_8.yaml") as runner: runner.rollout(items, skill_content=None, run_id="...")`
 **Inputs**: `configs/agent/s2_8.yaml` 指定的 dotenv、模型、数据、服务与轨迹目录；`AgentItem` 列表
 **Outputs**: `<trajectory_root>/<run_id>/manifest.json`、`results.jsonl`、逐 item/attempt 自包含轨迹目录
-**Notes**: 当前不依赖 SkillOpt；公开面仅 Python API + Skill 内容；不读取 `~/.pi/agent/models.json`
+**Notes**: 普通 rollout 不依赖 SkillOpt；SkillOpt 训练由独立适配入口调用本 API；不读取 `~/.pi/agent/models.json`
 **Code Map**: [`docs/code_maps/systems/configurable_agent_runtime.md`](../code_maps/systems/configurable_agent_runtime.md)
+
+### agent/skillopt/
+**Purpose**: 用用户指定的 ViSTR Public ID 池和原生 SkillOpt DocVQA 训练配方更新 S2.8 Skill
+**Usage**: `/opt/conda/bin/python -u -m agent.skillopt --config configs/skillopt/vistr_docvqa.yaml [--smoke]`
+**Inputs**: 固定 commit 的 `/workspace/Spatial-Agent/SkillOpt`、SkillOpt YAML、S2.8 agent YAML/dotenv、ViSTR ID JSON
+**Outputs**: `env.out_root` 下的 generated splits、patches、Skill versions、gate/state/summary 和轨迹投影；原生 Pi 轨迹仍由 agent YAML 指定
+**Notes**: `--smoke` 为 2-train/1-val 的一次真实付费 step；正式运行继承 DocVQA 的 4 epoch 超参数
+**Code Map**: [`docs/code_maps/systems/skillopt_vistr_training.md`](../code_maps/systems/skillopt_vistr_training.md)
+
+### agent/skillopt/prepare_comparison.py + compare_runs.py
+**Purpose**: 准备 seed-43 的 ViSTR/DocVQA 各100条对比数据，并汇总同预算 SkillOpt 运行
+**Usage**: `/opt/conda/bin/python -u -m agent.skillopt.prepare_comparison --config configs/skillopt/comparison_100.yaml`；完成双边训练后运行 `python -m agent.skillopt.compare_runs --vistr <dir> --docvqa <dir> --out <dir>`
+**Inputs**: ViSTR Public `data.json`、本地 DocVQA validation Parquet、SkillOpt 534-ID manifest、两边 SkillOpt summary/history/results
+**Outputs**: `data/skillopt_comparison/seed43/` 物化数据；报告目录中的 `comparison.json` 和 `comparison.md`
+**Notes**: 各100条、20/10/70、batch5；主指标只计 fast gate accept，slow/meta 单列；正式交接报告使用 `--expected-steps 16` 拒绝 partial run
+**Code Map**: [`docs/code_maps/systems/skillopt_vistr_training.md`](../code_maps/systems/skillopt_vistr_training.md)
+
+### scripts/setup_handover_env.sh
+**Purpose**: 在全新 NVIDIA 机器创建仓库内 `.venv`，安装固定 PyTorch/Python 依赖、SkillOpt 与 Pi 0.84.0
+**Usage**: `HANDOVER_PYTHON=python3.11 bash scripts/setup_handover_env.sh`
+**Inputs**: sibling `SkillOpt` clean commit `db46cd9`、`requirements.handover.txt`、tracked Pi npm lock、系统 Node/ffmpeg/NVIDIA driver
+**Outputs**: `.venv/` 与 `third_party/pi-runtime/node_modules/`（均不入 Git）
+**Notes**: 默认 PyTorch CUDA 12.8 wheel；其他官方 wheel index 通过 `HANDOVER_TORCH_INDEX_URL` 显式指定并记录
+
+### scripts/handover_preflight.py
+**Purpose**: 在正式 GPT-5.5 SkillOpt 实验前检查环境、GPU、Pi、数据、模型和固定 SkillOpt checkout
+**Usage**: `.venv/bin/python scripts/handover_preflight.py [--api]`
+**Inputs**: `s2_8_gpt55.yaml`、`.env.gpt55`、ViSTR/DocVQA、GroundingDINO、SkillOpt/Pi
+**Outputs**: PASS/FAIL 控制台清单；`--api` 额外执行一次付费 GPT-5.5 图像+function-call probe
+**Notes**: 默认完全离线；异常只报告类型/HTTP status，不输出 API key
+**Code Map**: [`docs/code_maps/systems/skillopt_vistr_training.md`](../code_maps/systems/skillopt_vistr_training.md)
 
 ### agent/coding_agent/eval_coding_agent.py
 **Purpose**: V4 action plan pipeline 批量评测（checkpoint/resume）

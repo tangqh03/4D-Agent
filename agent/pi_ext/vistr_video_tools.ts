@@ -106,12 +106,19 @@ async function framesContent(video: string, times: number[]): Promise<Block[]> {
 const INDEX_MAX_FRAMES = 12;
 const INDEX_SCALE = "scale=480:-2";
 
-let observerRuntimeConfig: { baseUrl: string; apiKey: string; model: string; headers: Record<string, string> } | null = null;
+let observerRuntimeConfig: {
+	baseUrl: string;
+	apiKey: string;
+	model: string;
+	reasoningEffort: string;
+	headers: Record<string, string>;
+} | null = null;
 
 function captureObserverConfig(): void {
 	const baseUrl = process.env.VISTR_OBSERVER_BASE_URL;
 	const apiKey = process.env.VISTR_OBSERVER_API_KEY;
 	const model = process.env.VISTR_OBSERVER_MODEL;
+	const reasoningEffort = process.env.VISTR_OBSERVER_REASONING_EFFORT ?? "";
 	if (!baseUrl || !apiKey || !model) {
 		throw new Error("Observer model is not configured; set VISTR_OBSERVER_BASE_URL, VISTR_OBSERVER_API_KEY, and VISTR_OBSERVER_MODEL");
 	}
@@ -120,12 +127,19 @@ function captureObserverConfig(): void {
 		try { headers = JSON.parse(process.env.VISTR_OBSERVER_HEADERS_JSON); }
 		catch { throw new Error("VISTR_OBSERVER_HEADERS_JSON must be valid JSON"); }
 	}
-	observerRuntimeConfig = { baseUrl, apiKey, model, headers };
+	observerRuntimeConfig = { baseUrl, apiKey, model, reasoningEffort, headers };
 	delete process.env.VISTR_OBSERVER_API_KEY;
 	delete process.env.VISTR_OBSERVER_HEADERS_JSON;
+	delete process.env.VISTR_OBSERVER_REASONING_EFFORT;
 }
 
-async function gatewayConfig(): Promise<{ baseUrl: string; apiKey: string; model: string; headers: Record<string, string> }> {
+async function gatewayConfig(): Promise<{
+	baseUrl: string;
+	apiKey: string;
+	model: string;
+	reasoningEffort: string;
+	headers: Record<string, string>;
+}> {
 	if (!observerRuntimeConfig) captureObserverConfig();
 	return observerRuntimeConfig!;
 }
@@ -135,6 +149,26 @@ function observerThinkingOverride(baseUrl: string): Record<string, unknown> {
 	return hostname === "deepseek.com" || hostname.endsWith(".deepseek.com")
 		? { thinking: { type: "disabled" } }
 		: {};
+}
+
+function observerCompletionOptions(
+	baseUrl: string,
+	legacyMaxTokens: number,
+	openAIMaxTokens: number,
+	reasoningEffort: string,
+): Record<string, unknown> {
+	const hostname = new URL(baseUrl).hostname.toLowerCase();
+	if (hostname === "api.openai.com") {
+		return {
+			max_completion_tokens: openAIMaxTokens,
+			...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+		};
+	}
+	return {
+		max_tokens: legacyMaxTokens,
+		temperature: 0,
+		...observerThinkingOverride(baseUrl),
+	};
 }
 
 // One batch VLM call: objective per-timestamp captions. Deliberately receives
@@ -171,13 +205,10 @@ async function captionTimeline(video: string, times: number[]): Promise<
 			body: JSON.stringify({
 				model: gw.model,
 				messages: [{ role: "user", content }],
-				...observerThinkingOverride(gw.baseUrl),
-				// Thinking models spend a chunk of the budget on the forced
-				// <think> preamble: 1000 tokens frequently ended inside the
-				// thinking block (content=null). 1500 leaves room to finish
-				// thinking AND emit the caption lines.
-				max_tokens: 1500,
-				temperature: 0,
+				...observerCompletionOptions(gw.baseUrl, 1500, 4096, gw.reasoningEffort),
+				// Generic providers retain the proven 1500-token budget.
+				// GPT reasoning receives 4096 completion tokens so it can
+				// finish reasoning and still emit every caption line.
 			}),
 			signal: AbortSignal.timeout(120_000),
 		});
@@ -338,9 +369,7 @@ export default function vistrVideoTools(pi: ExtensionAPI) {
 						{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${annotatedB64}` } },
 					],
 				}],
-				...observerThinkingOverride(gw.baseUrl),
-				max_tokens: 128,
-				temperature: 0,
+				...observerCompletionOptions(gw.baseUrl, 128, 1024, gw.reasoningEffort),
 			}),
 			signal: AbortSignal.timeout(60_000),
 		});

@@ -49,6 +49,7 @@ class ModelConfig:
     id: str
     name: str
     reasoning: bool
+    thinking_level: str
     context_window: int
     max_tokens: int
 
@@ -221,8 +222,8 @@ class AgentConfig:
     @staticmethod
     def _parse_model(raw: dict[str, Any], where: str,
                      providers: dict[str, ProviderConfig]) -> ModelConfig:
-        _keys(raw, {"provider", "id", "name", "reasoning", "context_window",
-                    "max_tokens"}, where)
+        _keys(raw, {"provider", "id", "name", "reasoning", "thinking_level",
+                    "context_window", "max_tokens"}, where)
         provider = str(_required(raw, "provider", where))
         if provider not in providers:
             raise ValueError(f"{where}.provider references unknown provider: {provider}")
@@ -233,9 +234,16 @@ class AgentConfig:
             raise ValueError(f"{where}.context_window must be -1 or positive")
         if max_tokens != -1 and max_tokens < 1:
             raise ValueError(f"{where}.max_tokens must be -1 or positive")
+        thinking_level = str(raw.get("thinking_level", "")).strip().lower()
+        allowed_levels = {"", "off", "minimal", "low", "medium", "high", "xhigh", "max"}
+        if thinking_level not in allowed_levels:
+            raise ValueError(f"{where}.thinking_level is invalid: {thinking_level!r}")
+        if thinking_level and not bool(raw.get("reasoning", False)):
+            raise ValueError(f"{where}.thinking_level requires reasoning=true")
         return ModelConfig(
             provider=provider, id=model_id, name=str(raw.get("name", model_id)),
             reasoning=bool(raw.get("reasoning", False)),
+            thinking_level=thinking_level,
             context_window=context_window, max_tokens=max_tokens)
 
     def validate(self) -> None:

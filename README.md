@@ -63,6 +63,66 @@ from agent.datasets import ViSTRAdapter
 
 工具实现、Pi 命令构造、Observer 子调用、Perception Service 和轨迹物化均封装在 runtime 内，不需要 SkillOpt 或普通调用方直接操作。
 
+## SkillOpt 自进化
+
+当前 runtime 已通过一个薄适配层接入
+`/workspace/Spatial-Agent/SkillOpt` 的原生 `ReflACTTrainer`。4D-Agent 不复制
+SkillOpt 的训练算法，也不会允许优化器修改工具定义、Policy user prompt、Observer、
+Perception Service 或评分逻辑；每轮唯一变化的是传给
+`AgentRunner.rollout(..., skill_content=...)` 的 Skill 正文。
+
+```mermaid
+flowchart LR
+    IDs["用户指定 ViSTR IDs"] --> Split["SkillOpt 2:1:7 split<br/>seed 42"]
+    Split --> Train[train batch]
+    Skill[current Skill] --> Rollout["S2.8 Pi rollout"]
+    Train --> Rollout
+    Rollout --> Reflect["Reflect → Aggregate → Select"]
+    Reflect --> Candidate[candidate Skill]
+    Candidate --> Gate["完整 val hard gate"]
+    Gate --> Skill
+    Skill --> Test["最终 test"]
+```
+
+配置 [configs/skillopt/vistr_docvqa.yaml](configs/skillopt/vistr_docvqa.yaml)
+直接继承 SkillOpt 的 DocVQA 训练 profile。用户通过
+`dataset.id_file` 提供最终实验使用的 Public 题目 ID 池，系统再使用 SkillOpt 原生
+ratio splitter 按 `2:1:7`、seed 42 确定性生成 train/val/test。默认 ID 文件包含
+本地全部 670 道 Public 题，对应 134/67/469；这不是 ViSTR 官方 public/private
+划分，也不会访问 private held-out 数据。
+
+真实 API/GPU 的单步 smoke：
+
+```bash
+/opt/conda/bin/python -u -m agent.skillopt \
+  --config configs/skillopt/vistr_docvqa.yaml \
+  --smoke
+```
+
+正式 4 epoch 训练去掉 `--smoke`。SkillOpt 源码必须处于 YAML 指定的 commit 且
+没有 tracked 修改；optimizer 默认继承 `s2_8.yaml` 的 Policy provider、模型和
+dotenv 凭证。完整字段、DocVQA 超参数、数据流和输出说明见
+[configs/skillopt/README.md](configs/skillopt/README.md)。
+
+仓库还提供 ViSTR 与上游 DocVQA agent 的100条 single-seed 对比配置。两边使用
+seed 43、20/10/70 split、batch 5、16个 Fast Update Steps 和相同模型。已有
+DeepSeek profiles 用于管线 smoke；Fengyuan 正式交接实验使用
+`vistr_comparison_100_gpt55.yaml` 与 `docvqa_comparison_100_gpt55.yaml`，统一为
+GPT-5.5 medium。主指标是通过严格 validation gate 的 Effective Updates / 全部
+Fast Update Steps；正式报告要求两边均为16/16 step。
+
+全新 NVIDIA 机器的完整安装、数据下载、GPT 配置、四阶段门禁、正式命令、失败
+分类和验收清单见
+[Fengyuan GPT-5.5 中文交接](docs/working_logs/handovers/2026-09-05_fengyuan_gpt55_skillopt_pilot_zh.md)
+（另有[英文版](docs/working_logs/handovers/2026-09-05_fengyuan_gpt55_skillopt_pilot.md)）。
+最小安装入口为：
+
+```bash
+HANDOVER_PYTHON=python3.11 bash scripts/setup_handover_env.sh
+cp .env.gpt55.example .env.gpt55
+.venv/bin/python scripts/handover_preflight.py
+```
+
 ## 固定工具集合
 
 当前 `s2_8_observation` Tool Bundle 固定包含九个工具：
@@ -197,11 +257,13 @@ outputs/trajectories/<run_id>/
 - `results.jsonl`：逐题 `RolloutRecord`。
 - Pi JSONL/HTML：完整原生轨迹；每条 session 都会渲染 HTML。
 - `conversation.json`：紧凑的消息、工具、图片相对路径和最终评分，供后续 SkillOpt/reflection 使用。
+- SkillOpt 兼容工具事件同时包含 `cmd/obs`；旧的 `name/arguments/observation` 字段继续保留。
 
 ## 离线验证
 
 ```bash
 /opt/conda/bin/python agent/tests/test_runtime.py
+/opt/conda/bin/python agent/tests/test_skillopt_bridge.py
 /opt/conda/bin/python agent/tests/test_eval_pi_parse.py
 node agent/pi_ext/tests/run.mjs
 ```
@@ -212,7 +274,11 @@ node agent/pi_ext/tests/run.mjs
 
 - [Runtime 使用说明](docs/agent/configurable_runtime.md)
 - [完整配置字段与 DeepSeek/OpenRouter 配方](configs/agent/README.md)
+- [SkillOpt 配置与 DocVQA 训练配方](configs/skillopt/README.md)
+- [Fengyuan GPT-5.5 实验交接（中文）](docs/working_logs/handovers/2026-09-05_fengyuan_gpt55_skillopt_pilot_zh.md)
+- [Fengyuan GPT-5.5 experiment handover (English)](docs/working_logs/handovers/2026-09-05_fengyuan_gpt55_skillopt_pilot.md)
 - [架构 code map](docs/code_maps/systems/configurable_agent_runtime.md)
+- [SkillOpt 训练 code map](docs/code_maps/systems/skillopt_vistr_training.md)
 - [S2.8 observation stack](docs/code_maps/systems/pi_observation_stack.md)
 - [架构决策记录](docs/adr/2026-09-05_configurable_s28_runtime.md)
 - [当前工作状态](docs/working_logs/active.md)

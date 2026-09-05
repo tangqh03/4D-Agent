@@ -1,0 +1,28 @@
+_base_: ../../../SkillOpt/configs/docvqa/default.yaml
+
+integration:
+  skillopt_root: ../../../SkillOpt
+  expected_commit: db46cd9ae7ce12f1dbd73c945185816aa738751d
+  agent_config: ../agent/s2_8.yaml
+
+dataset:
+  split_dir: ../../data/skillopt_comparison/seed43/docvqa/splits
+
+model:
+  backend: openai_compatible
+  optimizer: inherit_policy
+  target: inherit_policy
+  optimizer_backend: openai_compatible
+  target_backend: openai_compatible
+
+train:
+  batch_size: 5
+  seed: 43
+
+env:
+  name: docvqa
+  skill_init: ../../../SkillOpt/skillopt/envs/docvqa/skills/initial.md
+  split_mode: split_dir
+  split_dir: ../../data/skillopt_comparison/seed43/docvqa/splits
+  split_seed: 43
+  out_root: ../../outputs/skillopt/comparison_seed43/docvqa

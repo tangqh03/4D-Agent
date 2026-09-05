@@ -24,6 +24,7 @@ flowchart TD
     Y[YAML] --> C[AgentConfig]
     E[Selected dotenv] --> C
     C --> M[Temporary Pi models.json]
+    C --> T[Optional Pi --thinking level]
     C --> S{Perception /health}
     S -->|healthy| R[AgentRunner]
     S -->|missing| P[Start managed GroundingDINO]
@@ -33,6 +34,7 @@ flowchart TD
     I --> R
     R --> W[Per-item temporary workspace]
     W --> PI[Pi + fixed S2.8 Tool Bundle]
+    T --> PI
     PI --> J[Attempt session JSONL]
     J --> H[Pi HTML export]
     J --> X[Decode image blocks]
@@ -49,7 +51,7 @@ with AgentRunner(config):
     generate_temporary_pi_model_config()
     for item in items concurrently:
         for configured attempt:
-            run Pi with fixed tools, session directory, and Skill
+            run Pi with fixed tools, session directory, Skill, and configured thinking level
             parse answer and tool trace
             export every session to HTML
             decode session images and write conversation.json
@@ -69,6 +71,7 @@ with AgentRunner(config):
 | `get_tool_bundle` | `agent/runtime/tool_bundles.py` | Closed S2.8 tool allowlist and extension mapping |
 | `ViSTRAdapter` | `agent/datasets/vistr.py` | Benchmark records to Agent Items |
 | `gatewayConfig` | `agent/pi_ext/vistr_video_tools.ts` | Observer endpoint supplied by the runner environment |
+| `observerCompletionOptions` | `agent/pi_ext/vistr_video_tools.ts` | Use GPT reasoning fields while preserving DeepSeek/OpenRouter request shapes |
 
 ## Artifact Layout
 

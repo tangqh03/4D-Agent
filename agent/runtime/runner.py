@@ -262,6 +262,8 @@ class AgentRunner:
                    "--no-context-files", "--approve",
                    "--tools", ",".join(self.bundle.tools),
                    "--append-system-prompt", skill]
+        if self.config.policy.thinking_level:
+            command.extend(["--thinking", self.config.policy.thinking_level])
         for extension in self.bundle.extensions:
             command.extend(["-e", str(extension)])
         command.append(user_prompt)
@@ -296,6 +298,7 @@ class AgentRunner:
         env["VISTR_OBSERVER_BASE_URL"] = self.config.env_values[provider.base_url_env]
         env["VISTR_OBSERVER_API_KEY"] = self.config.env_values[provider.api_key_env]
         env["VISTR_OBSERVER_MODEL"] = self.config.observer.id
+        env["VISTR_OBSERVER_REASONING_EFFORT"] = self.config.observer.thinking_level
         env["VISTR_OBSERVER_HEADERS_JSON"] = json.dumps({
             name: self.config.env_values[env_name]
             for name, env_name in provider.headers_env.items()

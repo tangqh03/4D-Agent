@@ -12,7 +12,7 @@ The supported runtime is a Python API. It keeps the S2.8 observation tools fixed
 ## Configure
 
 See `configs/agent/README.md` for the complete field reference and copyable
-DeepSeek, OpenRouter, and split Policy/Observer recipes.
+DeepSeek, OpenRouter, GPT-5.5, and split Policy/Observer recipes.
 
 1. Copy `.env.example` to the dotenv path named by `configs/agent/s2_8.yaml`.
 2. Put API URLs, keys, private headers, and the Perception Service URL in that dotenv file.
@@ -24,6 +24,11 @@ The selected dotenv overrides same-named variables only in child-process environ
 Observer subcalls to a `deepseek.com` Base URL explicitly send
 `thinking: {type: disabled}` so their small caption/selection output budgets are
 reserved for committed answers. Other providers do not receive this field.
+
+When `models.*.thinking_level` is set, the Policy receives the corresponding
+Pi `--thinking` level and the Observer receives the same reasoning effort.
+Official OpenAI Observer calls use `max_completion_tokens` without
+`temperature`; generic compatible providers retain their legacy request shape.
 
 Selected provider secrets are copied only into a mode-0600 temporary Pi config. The Observer captures its credentials during extension registration and removes them from the environment before the model-callable `bash` tool runs.
 

@@ -102,11 +102,13 @@ def _session_to_conversation(
                 if not isinstance(block, dict) or block.get("type") != "toolCall":
                     continue
                 turn += 1
+                name = str(block.get("name", ""))
+                arguments = block.get("arguments", {})
                 event = {"type": "tool_call", "turn": turn,
                          "tool_call_id": block.get("id", ""),
-                         "name": block.get("name", ""),
-                         "arguments": block.get("arguments", {}),
-                         "observation": ""}
+                         "name": name, "arguments": arguments,
+                         "cmd": f"{name}({json.dumps(arguments, ensure_ascii=False, sort_keys=True)})",
+                         "observation": "", "obs": ""}
                 conversation.append(event)
                 call_events[str(block.get("id", ""))] = event
         elif role == "toolResult":
@@ -117,7 +119,8 @@ def _session_to_conversation(
                 turn += 1
                 event = {"type": "tool_call", "turn": turn,
                          "tool_call_id": call_id, "name": name,
-                         "arguments": {}, "observation": ""}
+                         "arguments": {}, "cmd": f"{name}({{}})",
+                         "observation": "", "obs": ""}
                 conversation.append(event)
                 call_events[call_id] = event
             observations: list[str] = []
@@ -146,7 +149,9 @@ def _session_to_conversation(
                         observations.append(f"[image] images/{filename}")
             if message.get("isError"):
                 observations.append("[tool error]")
-            event["observation"] = _trim("\n".join(observations))
+            observation = _trim("\n".join(observations))
+            event["observation"] = observation
+            event["obs"] = observation
 
     if execution_error:
         detail = f"[EXECUTION RESULT]\nError: {execution_error}"

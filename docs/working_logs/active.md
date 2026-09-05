@@ -5,6 +5,81 @@ last_updated: 2026-09-05
 
 # ViSTR-Agent — Active Work State
 
+## Current Focus: Fengyuan GPT-5.5 clean-machine handover (2026-09-05)
+
+- Handover scope is fixed to the seed-43 100+100 ViSTR/DocVQA pilot. The
+  primary result is each system's strict Fast-gate accepts divided by all 16
+  Fast Update Steps; the conclusion is correlation-only.
+- `s2_8_gpt55.yaml` configures official OpenAI `gpt-5.5`, medium Pi reasoning,
+  a 65,536 Policy ceiling, repository-local `.venv`, NVIDIA GPU 0, and a
+  separate `.env.gpt55`.
+- Official OpenAI Observer calls use `max_completion_tokens`, medium reasoning,
+  and no temperature. SkillOpt uses its existing `openai_chat` backend;
+  DeepSeek/OpenRouter request behavior remains unchanged.
+- The clean-machine package now includes pinned Python requirements, Pi 0.84.0
+  npm manifests, setup automation, offline/paid preflight, fixed Hugging Face
+  revisions, formal GPT profiles, failure classification, and a return-package
+  checklist.
+- Full handover:
+  `docs/working_logs/handovers/2026-09-05_fengyuan_gpt55_skillopt_pilot_zh.md`
+  (Chinese) and `2026-09-05_fengyuan_gpt55_skillopt_pilot.md` (English).
+- No GPT API call, download, or formal experiment was launched while preparing
+  the handover. The recipient must pass offline preflight, paid shape probe,
+  data materialization, and paired smoke before the two formal runs.
+
+Offline verification: handover 4/4, comparison 7/7, bridge 8/8, runtime 15/15,
+parser 21/21, S2.8 tools 34/34, plus npm-lock dry run and shell/Python syntax.
+Details: `docs/working_logs/runs/2026-09-05_fengyuan_handover_readiness.md`.
+
+## Current Focus: SkillOpt ViSTR versus DocVQA pilot (2026-09-05)
+
+- A seed-43 materializer now selects 100 ViSTR Public and 100 gold-answer
+  DocVQA items, producing matching 20/10/70 splits. ViSTR covers all 15 tasks;
+  DocVQA uses 100 distinct images from SkillOpt's released 534-ID pool.
+- Both formal profiles use batch size 5, four epochs, and the same 16-step
+  cosine edit schedule. Target/optimizer inherit DeepSeek from `s2_8.yaml`;
+  each benchmark keeps its native agent and initial Skill.
+- `compare_runs` counts only strict Fast-gate accepts as Effective Updates and
+  reports slow updates, patches, candidates, validation/test deltas, failures,
+  attempts, timeouts, and usage separately.
+- Real paired one-step smokes completed. Both produced candidates and were
+  rejected on a 1.0→1.0 validation tie. ViSTR took 2,011.4s and had one item
+  exhaust three 600s attempts; DocVQA took 9.1s with no failure. This verifies
+  the pipeline but is not an experimental result.
+- Timeout profiling showed ViSTR spent roughly 90% of each failed attempt in
+  90+ short model turns around 100+ repeated observations; tools were fast.
+  Per user decision, the existing `600s × 3` policy remains unchanged.
+- No-op resume now preserves the original summary; both smokes resumed with
+  zero model calls. Secret scan found zero hits. The 100-item formal runs were
+  intentionally not launched.
+
+Offline verification: comparison 7/7, bridge 6/6, runtime 13/13, parser 21/21,
+S2.8 tools 33/33. Details:
+`docs/working_logs/runs/2026-09-05_skillopt_cross_benchmark_smokes.md`.
+
+## Current Focus: Native SkillOpt training around S2.8 (2026-09-05)
+
+- `agent.skillopt` now connects the fixed S2.8 `AgentRunner` to the native
+  `/workspace/Spatial-Agent/SkillOpt` `ReflACTTrainer`; the external checkout is
+  pinned to clean commit `db46cd9` and no training loop is copied locally.
+- `configs/skillopt/vistr_docvqa.yaml` inherits the upstream DocVQA recipe.
+  Users supply a ViSTR Public ID JSON pool; SkillOpt's generic ratio loader uses
+  `2:1:7`, seed 42. The default 670 IDs materialize as 134/67/469.
+- Only `skill_content` evolves. Policy/Observer configuration, nine tools,
+  multi-turn Pi execution, scoring, concurrency, and native trajectory root
+  remain in `configs/agent/s2_8.yaml`.
+- Native conversations now include SkillOpt `cmd/obs` fields while preserving
+  `name/arguments/observation`; every Pi attempt still exports HTML.
+- Real 1-step smoke completed: train 0/2, baseline/candidate val both 1/1,
+  one valid DeepSeek patch, strict gate rejection, 1,674.4 seconds and 37,707
+  optimizer tokens. One train item timed out once and succeeded on retry; all
+  five attempts rendered HTML. Secret scan found zero output hits.
+
+Offline verification: SkillOpt bridge 6/6, runtime 13/13, parser 21/21, S2.8
+tools 33/33. Details:
+`docs/working_logs/runs/2026-09-05_native_skillopt_vistr.md` and
+`docs/code_maps/systems/skillopt_vistr_training.md`.
+
 ## Current Focus: Configurable S2.8 Runtime + SkillOpt-ready trajectories (2026-09-05)
 
 当前主线已从单体 `eval_pi_agentic.py` 抽象为 `agent/runtime/` Python API：
@@ -13,7 +88,7 @@ last_updated: 2026-09-05
 - `AgentRunner`：生成独立 Pi 配置、固定 S2.8 九工具 allowlist、managed/eager GroundingDINO 生命周期、并发 rollout、attempt retry 与 manifest/hash resume。
 - `ViSTRAdapter`：ViSTR `data.json`/split → 通用 `AgentItem`；评分输出 SkillOpt 兼容的 `hard`/`soft`。
 - 每个 attempt 同目录保存 Pi JSONL、Pi 原生 HTML、本轮 `skill.md`、实际 user prompt、从 JSONL 解码的图片和 DocVQA 风格 `conversation.json`。
-- 当前不安装/实现 SkillOpt；公开的可进化面仅 `skill_content`。默认 seed 为 `skills/s2_8_initial.md`，通过 Pi system append 注入。
+- 普通 rollout 不依赖 SkillOpt；独立 `agent.skillopt` 入口可调用固定版本的外部 SkillOpt。公开的可进化面仍仅为 `skill_content`，默认 seed 为 `skills/s2_8_initial.md`。
 - Observer 模型默认继承 Policy，也可在 YAML 独立指定；扩展不再读取 `~/.pi/agent/models.json`。
 - Policy 固定 user prompt、可进化 Skill 与 Observer 子调用 prompt 已统一为英文；仅旧答案解析保留中文兼容。
 - Policy 答案协议为 `<answer>exact option text</answer>`；runtime 优先解析最后一个完整 answer tag，无标签时保留旧轨迹的选项兜底。

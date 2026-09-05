@@ -1,0 +1,52 @@
+# Fengyuan handover profile: GPT-5.5 with medium reasoning.
+version: 1
+env_file: ../../.env.gpt55
+
+providers:
+  openai:
+    api: openai-completions
+    base_url_env: POLICY_API_BASE_URL
+    api_key_env: POLICY_API_KEY
+
+models:
+  policy:
+    provider: openai
+    id: gpt-5.5
+    name: GPT-5.5 Medium
+    reasoning: true
+    thinking_level: medium
+    context_window: 1050000
+    max_tokens: 65536
+  observer:
+    inherit: policy
+
+agent:
+  backend: pi
+  tool_bundle: s2_8_observation
+  seed_skill: ../../skills/s2_8_initial.md
+  timeout_s: 600
+  max_attempts: 3
+  retry_backoff_s: 5
+  workers: 4
+  pi_binary: ../../third_party/pi-runtime/node_modules/.bin/pi
+  tool_python: ../../.venv/bin/python
+  path_prepend:
+    - ../../.venv/bin/
+
+perception:
+  mode: managed
+  endpoint_env: PERCEPTION_URL
+  python: ../../.venv/bin/python
+  script: ../../scripts/perception_service.py
+  model_path: ../../models/grounding-dino-base
+  visible_devices: "0"
+  eager: true
+  startup_timeout_s: 180
+
+dataset:
+  adapter: vistr
+  root: ../../data/benchmarks/ViSTR-Bench-Public
+  split_config: ../split.json
+
+artifacts:
+  trajectory_root: ../../outputs/trajectories

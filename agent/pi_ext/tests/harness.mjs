@@ -6,22 +6,26 @@
  * - Provides a mock ExtensionAPI (on/registerTool/appendEntry) and a fetch
  *   stub for the gateway (chat/completions) and perception service
  *   (/ground, /annotate) — no real LLM / GPU involved.
- * - Real ffmpeg/ffprobe from /opt/conda/envs/spatialagent/bin are used for
- *   frame extraction against a tiny generated test video.
+ * - Real ffmpeg/ffprobe from .venv/bin, the legacy environment, or PATH are
+ *   used for frame extraction against a tiny generated test video.
  *
  * Run:  node agent/pi_ext/tests/run.mjs
  */
 
 import { createRequire } from "node:module";
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
 // ── Environment: real ffmpeg/ffprobe must be reachable by the tools ──
-const FF_ENV = "/opt/conda/envs/spatialagent/bin";
+export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const localBin = join(REPO_ROOT, ".venv", "bin");
+const legacyBin = "/opt/conda/envs/spatialagent/bin";
+const FF_ENV = [localBin, legacyBin].find((path) => existsSync(join(path, "ffmpeg")));
 const oldPath = process.env.PATH ?? "";
-if (!oldPath.includes(FF_ENV)) {
+if (FF_ENV && !oldPath.includes(FF_ENV)) {
 	process.env.PATH = `${FF_ENV}:${oldPath}`;
 }
 process.env.VISTR_PERCEPTION_URL = "http://perception.test"; // stub-routed, never real
@@ -32,11 +36,12 @@ process.env.VISTR_OBSERVER_MODEL = "test-vlm";
 process.env.VISTR_OBSERVER_HEADERS_JSON = '{"x-observer-test":"configured"}';
 
 // ── jiti (reuse pi's own loader dependency) ──────────────────────────
-const JITI_STATIC = "/workspace/Spatial-Agent/4D-Agent/third_party/pi-runtime/node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib/jiti-static.mjs";
+const PI_ROOT = join(REPO_ROOT, "third_party", "pi-runtime", "node_modules", "@earendil-works", "pi-coding-agent");
+const JITI_STATIC = join(PI_ROOT, "node_modules", "jiti", "lib", "jiti-static.mjs");
 const { createJiti } = await import(JITI_STATIC);
 
-const require = createRequire("/workspace/Spatial-Agent/4D-Agent/third_party/pi-runtime/node_modules/@earendil-works/pi-coding-agent/dist/loader.js");
-const PI_CODING_AGENT_ENTRY = "/workspace/Spatial-Agent/4D-Agent/third_party/pi-runtime/node_modules/@earendil-works/pi-coding-agent/dist/index.js";
+const require = createRequire(join(PI_ROOT, "dist", "loader.js"));
+const PI_CODING_AGENT_ENTRY = join(PI_ROOT, "dist", "index.js");
 
 /**
  * Load an extension module and return its full namespace:
