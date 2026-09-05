@@ -1,7 +1,7 @@
 ---
 status: active
 scope: general
-last_verified: 2026-08-09
+last_verified: 2026-09-05
 owner: gaozhe
 ---
 
@@ -20,6 +20,12 @@ Index of all output directories and artifacts produced by this project.
 ```
 
 ---
+
+### Configurable S2.8 rollout trajectories
+**Path**: YAML `artifacts.trajectory_root`（默认 `outputs/trajectories/`）
+**Produced by**: `AgentRunner.rollout()`
+**Format**: `<run_id>/manifest.json + results.jsonl + <item_id>/attempt-N/{Pi JSONL, Pi HTML, skill.md, target_user_prompt.txt, conversation.json, images/}`
+**Notes**: 每条 Pi session 都用原生 exporter 渲染；conversation 以相对路径引用从 session base64 解码的图片；目录默认 gitignored
 
 ### Prediction results
 **Path**: `outputs/predictions/`

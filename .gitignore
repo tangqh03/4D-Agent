@@ -1,5 +1,8 @@
 # API keys (NEVER commit)
 agent/llm_keys.local.json
+.env
+.env.*
+!.env.example
 
 # Benchmark data (large, download separately)
 data/
@@ -12,6 +15,7 @@ references/
 
 # External model weights
 third_party/
+models/
 *.pt
 
 # Python

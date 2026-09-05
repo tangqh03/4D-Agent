@@ -2,15 +2,13 @@
 status: active
 scope: pi-harness
 code_paths:
+  - agent/runtime/
   - agent/pi_ext/vistr_video_tools.ts
   - agent/pi_ext/evidence_closure.ts
   - scripts/perception_service.py
-  - agent/eval_pi_agentic.py
 entrypoints:
-  - "pi -p -e agent/pi_ext/vistr_video_tools.ts --provider amap-gateway --model qwen3-vl-plus \"...\""
-  - "VISTR_PI_EXTENSION=... python agent/eval_pi_agentic.py --per-task 6 --workers 4"
-  - "python scripts/perception_service.py --port 7876 --eager"
-last_verified: 2026-08-10
+  - "AgentRunner.from_yaml(...).rollout(...)"
+last_verified: 2026-09-05
 owner: gaozhe
 ---
 
@@ -37,7 +35,7 @@ flowchart TD
     B --> G["semantic_crop<br/>英文 target 描述"]
     G -->|HTTP /ground| H["perception_service :7876<br/>GroundingDINO GPU 常驻"]
     H -->|top-6 候选+编号标注图| G
-    G -->|隔离 VLM subcall 选 ID<br/>只见候选图+target| I[网关]
+    G -->|隔离 Observer subcall 选 ID<br/>只见候选图+target| I[Runner配置的网关]
     G -->|contextualROI 扩展| J["单帧: receipt + context crop<br/>视频段: stable ROI → zoomed.mp4"]
     C & D & E & F & J --> A
     J -->|zoomed video 可递归| B
@@ -141,15 +139,16 @@ perception_service:
 | `temporalUnion` | 同上 | 多时间点 bbox 求 temporal union |
 | `evidenceClosure` | `agent/pi_ext/evidence_closure.ts` | S2.6/S2.7 closure gate(当前不加载) |
 | `ground()` | `scripts/perception_service.py` | GroundingDINO 推理 + 编号标注图 |
-| `EXTRA_TOOLS_NOTE` | `agent/eval_pi_agentic.py` | user prompt 工具清单 |
-| `_select_answer` / `_parse_pi_json` | 同上 | committed answer 优先级、tool details 落盘 |
+| `PROMPT` / `AgentRunner._pi_command` | `agent/runtime/runner.py` | 固定 user 协议、Tool Bundle 与 Skill 注入 |
+| `extract_answer` / `parse_pi_json` | `agent/runtime/pi_events.py` | 答案优先级与 tool trace 解析 |
 
 ## Gotchas
 
 - 网关流式 tool-call args 为累积式:pi-ai 需先打补丁 `scripts/patch_pi_cumulative_args.py`(npm 重装后重跑)
 - GroundingDINO 文本仅英文(中文→[UNK])
 - t=duration 抽帧为空 → 全部时间参数经 `clampT(dur-0.1)`
-- perception 服务需先起(:7876),extension 只走 HTTP,禁止加载权重
+- 新 runtime 通过 YAML managed lifecycle 启动或复用 perception 服务；extension 只走 HTTP,禁止加载权重
+- Observer endpoint/model/key 由 AgentRunner 注入 `VISTR_OBSERVER_*`，不再读取 `~/.pi/agent/models.json`
 - thinking subcall 的 `content=null` 是合法形态;reasoning 不能当 committed content
 - zoomed video 写入 agent workspace(当前目录),agent 可对其递归调用工具
 - temporal union 在 grounding 部分失败时仍可用(只需 ≥1 个时间点成功)

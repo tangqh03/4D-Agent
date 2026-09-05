@@ -1,5 +1,6 @@
 /**
- * Test runner: imports every *.test.mjs, runs all registered tests.
+ * Active S2.8 test runner. Historical closure/ledger coverage remains in
+ * run_legacy.mjs but is not part of the current-flow gate.
  *
  * Usage:
  *   node agent/pi_ext/tests/run.mjs                 # all tests
@@ -8,9 +9,6 @@
  */
 import { runRegisteredTests } from "./harness.mjs";
 
-await import("./helpers.test.mjs");
-await import("./ledger.test.mjs");
-await import("./submit_answer.test.mjs");
 await import("./video_tools.test.mjs");
 
 const filterIndex = process.argv.findIndex((a) => a === "--filter");

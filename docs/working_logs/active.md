@@ -1,9 +1,30 @@
 ---
 status: active
-last_updated: 2026-08-10
+last_updated: 2026-09-05
 ---
 
 # ViSTR-Agent — Active Work State
+
+## Current Focus: Configurable S2.8 Runtime + SkillOpt-ready trajectories (2026-09-05)
+
+当前主线已从单体 `eval_pi_agentic.py` 抽象为 `agent/runtime/` Python API：
+
+- `AgentConfig.from_yaml()`：YAML 指定模型、工具包、数据、服务和轨迹根目录；API URL/key/私有 headers/Perception URL 来自 YAML 选定的 dotenv。
+- `AgentRunner`：生成独立 Pi 配置、固定 S2.8 九工具 allowlist、managed/eager GroundingDINO 生命周期、并发 rollout、attempt retry 与 manifest/hash resume。
+- `ViSTRAdapter`：ViSTR `data.json`/split → 通用 `AgentItem`；评分输出 SkillOpt 兼容的 `hard`/`soft`。
+- 每个 attempt 同目录保存 Pi JSONL、Pi 原生 HTML、本轮 `skill.md`、实际 user prompt、从 JSONL 解码的图片和 DocVQA 风格 `conversation.json`。
+- 当前不安装/实现 SkillOpt；公开的可进化面仅 `skill_content`。默认 seed 为 `skills/s2_8_initial.md`，通过 Pi system append 注入。
+- Observer 模型默认继承 Policy，也可在 YAML 独立指定；扩展不再读取 `~/.pi/agent/models.json`。
+- Policy 固定 user prompt、可进化 Skill 与 Observer 子调用 prompt 已统一为英文；仅旧答案解析保留中文兼容。
+- Policy 答案协议为 `<answer>exact option text</answer>`；runtime 优先解析最后一个完整 answer tag，无标签时保留旧轨迹的选项兜底。
+- `tmp.ipynb` 的单题 smoke cell 已加 Notebook-safe closed stdin workaround 与 10 秒进度心跳；该 workaround 仅作用于 cell 内，尚未改动 runtime 本体。
+- DeepSeek Observer 子调用会按 `deepseek.com` host 显式发送 `thinking: {type: disabled}`，避免 caption/候选选择的小输出预算被思考消耗；其他 provider 请求体不变。
+- 默认 `s2_8.yaml` 使用明确的 `deepseek` provider alias + Vision Exp 模型；`configs/agent/README.md` 已记录全部字段及 DeepSeek/OpenRouter/独立 Observer 配方。
+- 根 `README.md` 已切换到当前 S2.8 主线，说明了数据流、封装/公开边界、必填配置、单题运行和轨迹产物；旧 V4 内容不再被误标为当前架构。
+
+离线验证：runtime 13/13、active S2.8 tools 33/33（含 DeepSeek/OpenRouter request-shape 分支）、legacy Pi parser 21/21。未启动 API/GPU，未跑 benchmark。
+详见 `docs/code_maps/systems/configurable_agent_runtime.md` 与 run log
+`docs/working_logs/runs/2026-09-05_configurable_s28_runtime.md`。
 
 ## Current Focus: S2.8 — Context-preserving crop + 去掉证据账本 (2026-08-10)
 

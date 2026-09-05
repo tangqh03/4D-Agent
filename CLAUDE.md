@@ -28,6 +28,9 @@ leaderboard (visual spatial-temporal reasoning from continuous video cues, 15 su
 
 ## Quick reference
 ```bash
+# Current S2.8 runtime is a Python API; configure configs/agent/s2_8.yaml + its dotenv.
+/opt/conda/bin/python -c "from agent.runtime import AgentRunner; print(AgentRunner)"
+
 # Web visualization frontend (Streamlit: Taxonomy / Leaderboard / Sample Browser)
 bash scripts/web_frontend.sh                        # http://<host>:8731 (env: /opt/conda/envs/python3.10.13)
 
@@ -42,10 +45,11 @@ bash scripts/visualize.sh --samples <results.jsonl> # per-sample replay videos
 ## Key paths
 | Item | Path |
 |------|------|
-| Agent code | `agent/` (planned) |
+| Agent code | `agent/runtime/` + `agent/pi_ext/vistr_video_tools.ts` |
 | Scripts | `scripts/` |
 | Benchmark data (public split) | `data/benchmarks/ViSTR-Bench-Public/` → `/mnt/xlab-nas-wm/gaozhe.gz/hf_datasets/` |
 | Prediction results (JSONL) | `outputs/predictions/` |
+| S2.8 rollout trajectories | YAML `artifacts.trajectory_root` (default `outputs/trajectories/`) |
 | Visualization outputs | `data/visualizations/` |
 | External tool models | `third_party/` (planned: VGGT, WAFT, SAM2/CoTracker, ...) |
 | Reference paper | `references/ViSTR-Bench.pdf` |

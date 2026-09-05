@@ -26,9 +26,10 @@ if (!oldPath.includes(FF_ENV)) {
 }
 process.env.VISTR_PERCEPTION_URL = "http://perception.test"; // stub-routed, never real
 process.env.VISTR_QUESTION = "Is the ball in? Options: Yes / No"; // default for submit_answer tests
-// The local ~/.pi/agent/models.json only has vllm-local; the extension's
-// default provider (amap-gateway) does not exist here.
-process.env.VISTR_CAPTION_PROVIDER ??= "vllm-local";
+process.env.VISTR_OBSERVER_BASE_URL = "http://observer.test";
+process.env.VISTR_OBSERVER_API_KEY = "test-key";
+process.env.VISTR_OBSERVER_MODEL = "test-vlm";
+process.env.VISTR_OBSERVER_HEADERS_JSON = '{"x-observer-test":"configured"}';
 
 // ── jiti (reuse pi's own loader dependency) ──────────────────────────
 const JITI_STATIC = "/workspace/Spatial-Agent/4D-Agent/third_party/pi-runtime/node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib/jiti-static.mjs";
@@ -133,7 +134,7 @@ export function installFetch(routes) {
 		const bodyText = init?.body != null ? String(init.body) : "";
 		let body = null;
 		try { body = JSON.parse(bodyText); } catch { /* non-JSON */ }
-		calls.push({ url: u, body });
+		calls.push({ url: u, body, headers: init?.headers ?? {} });
 		const messages = body?.messages ?? [];
 		// Content may be a plain string (checker) or an array of text/image_url
 		// blocks (caption timeline, candidate selection).

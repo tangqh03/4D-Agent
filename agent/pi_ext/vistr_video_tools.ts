@@ -106,12 +106,35 @@ async function framesContent(video: string, times: number[]): Promise<Block[]> {
 const INDEX_MAX_FRAMES = 12;
 const INDEX_SCALE = "scale=480:-2";
 
-async function gatewayConfig(): Promise<{ baseUrl: string; apiKey: string; model: string }> {
-	const raw = await readFile(join(process.env.HOME ?? "~", ".pi", "agent", "models.json"), "utf-8");
-	const cfg = JSON.parse(raw);
-	const prov = cfg.providers[process.env.VISTR_CAPTION_PROVIDER ?? "amap-gateway"];
-	const model = process.env.VISTR_CAPTION_MODEL ?? prov.models[0].id;
-	return { baseUrl: prov.baseUrl, apiKey: prov.apiKey, model };
+let observerRuntimeConfig: { baseUrl: string; apiKey: string; model: string; headers: Record<string, string> } | null = null;
+
+function captureObserverConfig(): void {
+	const baseUrl = process.env.VISTR_OBSERVER_BASE_URL;
+	const apiKey = process.env.VISTR_OBSERVER_API_KEY;
+	const model = process.env.VISTR_OBSERVER_MODEL;
+	if (!baseUrl || !apiKey || !model) {
+		throw new Error("Observer model is not configured; set VISTR_OBSERVER_BASE_URL, VISTR_OBSERVER_API_KEY, and VISTR_OBSERVER_MODEL");
+	}
+	let headers: Record<string, string> = {};
+	if (process.env.VISTR_OBSERVER_HEADERS_JSON) {
+		try { headers = JSON.parse(process.env.VISTR_OBSERVER_HEADERS_JSON); }
+		catch { throw new Error("VISTR_OBSERVER_HEADERS_JSON must be valid JSON"); }
+	}
+	observerRuntimeConfig = { baseUrl, apiKey, model, headers };
+	delete process.env.VISTR_OBSERVER_API_KEY;
+	delete process.env.VISTR_OBSERVER_HEADERS_JSON;
+}
+
+async function gatewayConfig(): Promise<{ baseUrl: string; apiKey: string; model: string; headers: Record<string, string> }> {
+	if (!observerRuntimeConfig) captureObserverConfig();
+	return observerRuntimeConfig!;
+}
+
+function observerThinkingOverride(baseUrl: string): Record<string, unknown> {
+	const hostname = new URL(baseUrl).hostname.toLowerCase();
+	return hostname === "deepseek.com" || hostname.endsWith(".deepseek.com")
+		? { thinking: { type: "disabled" } }
+		: {};
 }
 
 // One batch VLM call: objective per-timestamp captions. Deliberately receives
@@ -144,10 +167,11 @@ async function captionTimeline(video: string, times: number[]): Promise<
 		const gw = await gatewayConfig();
 		const resp = await fetch(`${gw.baseUrl}/chat/completions`, {
 			method: "POST",
-			headers: { "Content-Type": "application/json", Authorization: `Bearer ${gw.apiKey}` },
+			headers: { "Content-Type": "application/json", Authorization: `Bearer ${gw.apiKey}`, ...gw.headers },
 			body: JSON.stringify({
 				model: gw.model,
 				messages: [{ role: "user", content }],
+				...observerThinkingOverride(gw.baseUrl),
 				// Thinking models spend a chunk of the budget on the forced
 				// <think> preamble: 1000 tokens frequently ended inside the
 				// thinking block (content=null). 1500 leaves room to finish
@@ -277,6 +301,7 @@ function temporalUnion(bboxes: number[][]): number[] {
 }
 
 export default function vistrVideoTools(pi: ExtensionAPI) {
+	captureObserverConfig();
 	const PERCEPTION_URL = process.env.VISTR_PERCEPTION_URL ?? "http://127.0.0.1:7876";
 
 	async function extractFullFrame(src: string, time_s: number | undefined, dir: string): Promise<{ path: string; time_s?: number }> {
@@ -300,7 +325,7 @@ export default function vistrVideoTools(pi: ExtensionAPI) {
 		const gw = await gatewayConfig();
 		const resp = await fetch(`${gw.baseUrl}/chat/completions`, {
 			method: "POST",
-			headers: { "Content-Type": "application/json", Authorization: `Bearer ${gw.apiKey}` },
+			headers: { "Content-Type": "application/json", Authorization: `Bearer ${gw.apiKey}`, ...gw.headers },
 			body: JSON.stringify({
 				model: gw.model,
 				messages: [{
@@ -313,6 +338,7 @@ export default function vistrVideoTools(pi: ExtensionAPI) {
 						{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${annotatedB64}` } },
 					],
 				}],
+				...observerThinkingOverride(gw.baseUrl),
 				max_tokens: 128,
 				temperature: 0,
 			}),

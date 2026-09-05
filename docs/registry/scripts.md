@@ -24,6 +24,14 @@ Index of all scripts in this project. Each entry documents purpose, usage, input
 
 ## Agent 包（`agent/`）
 
+### agent/runtime/ + agent/datasets/vistr.py
+**Purpose**: 当前主线 S2.8 Python API；YAML/.env 配置、固定工具包、managed perception、逐 attempt Pi JSONL/HTML/图片/conversation
+**Usage**: `with AgentRunner.from_yaml("configs/agent/s2_8.yaml") as runner: runner.rollout(items, skill_content=None, run_id="...")`
+**Inputs**: `configs/agent/s2_8.yaml` 指定的 dotenv、模型、数据、服务与轨迹目录；`AgentItem` 列表
+**Outputs**: `<trajectory_root>/<run_id>/manifest.json`、`results.jsonl`、逐 item/attempt 自包含轨迹目录
+**Notes**: 当前不依赖 SkillOpt；公开面仅 Python API + Skill 内容；不读取 `~/.pi/agent/models.json`
+**Code Map**: [`docs/code_maps/systems/configurable_agent_runtime.md`](../code_maps/systems/configurable_agent_runtime.md)
+
 ### agent/coding_agent/eval_coding_agent.py
 **Purpose**: V4 action plan pipeline 批量评测（checkpoint/resume）
 **Usage**: `/opt/conda/bin/python agent/coding_agent/eval_coding_agent.py [--split dev] [--tasks T1,T2] [--limit N] [--resume] [--workers 1]`
@@ -46,16 +54,16 @@ Index of all scripts in this project. Each entry documents purpose, usage, input
 **Notes**: 环境变量 `VISTR_PI_PROVIDER` / `VISTR_PI_MODEL` 切换; pi session 会积累在 `~/.pi/agent/sessions/`,量大需清理
 
 ### agent/eval_pi_agentic.py
-**Purpose**: pi harness 评测（Stage 2: agentic,带 extension 工具）
+**Purpose**: legacy pi harness 评测入口；新工作使用 `agent/runtime/` Python API
 **Usage**: `VISTR_PI_EXTENSION="agent/pi_ext/vistr_video_tools.ts,agent/pi_ext/evidence_closure.ts" python agent/eval_pi_agentic.py [--per-task 6] [--workers 4] [--resume]`
-**Inputs**: benchmark `data.json` + 视频; pi 安装于 `third_party/pi-runtime/`; extensions 通过 `VISTR_PI_EXTENSION` 指定
+**Inputs**: benchmark `data.json` + 视频; pi 安装于 `third_party/pi-runtime/`; 使用新视频扩展时还需手工提供 `VISTR_OBSERVER_*`
 **Outputs**: `outputs/predictions/pi_agentic_*.jsonl` 或 `--output` 指定
 **Notes**: 环境变量 `VISTR_PI_PROVIDER`/`VISTR_PI_MODEL` 切换; extension 路径自动转绝对路径; 输出含 `answer_source/no_answer/termination`，S2.6 无 FINAL 时只接受成功 submit，不从 reasoning 猜答案; code map `docs/code_maps/systems/pi_observation_stack.md`
 
 ### agent/pi_ext/vistr_video_tools.ts
 **Purpose**: pi extension — 观察原语五件套(index_video / read_video_sequence / read_multiframe / read_crop / semantic_crop)
-**Usage**: `pi -p -e agent/pi_ext/vistr_video_tools.ts ...` 或评测脚本 `VISTR_PI_EXTENSION` 环境变量
-**Inputs**: workspace 内视频/图片;semantic_crop 依赖 perception 服务(:7876);caption/selection subcall 走 `~/.pi/agent/models.json` 网关
+**Usage**: 由 `AgentRunner` 的 `s2_8_observation` Tool Bundle 加载；直接调试时需设置 `VISTR_OBSERVER_BASE_URL/API_KEY/MODEL`
+**Inputs**: workspace 内视频/图片；semantic_crop 依赖 perception 服务；caption/selection subcall 使用 Runner 注入的 Observer 配置
 **Notes**: 全部 task-agnostic;code map `docs/code_maps/systems/pi_observation_stack.md`
 
 ### agent/pi_ext/evidence_closure.ts
@@ -187,7 +195,7 @@ Index of all scripts in this project. Each entry documents purpose, usage, input
 ### agent/pi_ext/tests/run.mjs
 **Purpose**: pi 扩展工具（vistr_video_tools.ts + evidence_closure.ts）单元/集成测试套件；jiti 加载真实扩展源码，fetch 打桩 mock gateway/perception，ffmpeg 生成真实测试视频
 **Usage**: `node agent/pi_ext/tests/run.mjs`（可选 `--filter=name`）
-**Inputs**: 需要 `/opt/conda/envs/spatialagent/bin` ffmpeg（harness 自动加入 PATH）、`~/.pi/agent/models.json`（只需存在）
+**Inputs**: 需要 `/opt/conda/envs/spatialagent/bin` ffmpeg；gateway/perception 均由测试 harness 打桩
 **Outputs**: 控制台 ✓/✗ + 汇总；退出码非 0 表示失败
 **Notes**: 无网络/GPU/LLM 调用；`agent/pi_ext/*.ts` 中 `export {…}` 为行为中性的测试面导出
 **Cases (2026-08-09, 93 全过)**: harness 打桩支持 thinking 回复形态（`{content, reasoning}` / content=null）；覆盖 subcall 思考/正文分离、失败 index 不入 ledger、0-1 bbox 定向报错、select max_tokens≥128 与严格数字解析

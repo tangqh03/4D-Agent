@@ -67,6 +67,8 @@ Reference material loaded on demand.
 | `knowledge:vistr-bench` | ViSTR-Bench 论文摘要：任务/榜单/错误分析/改进方向 | `docs/knowledge/vistr_bench.md` |
 | `knowledge:tool-design-v1` | 工具设计报告 v1：9 工具覆盖矩阵 + 实施顺序 | `docs/knowledge/tool_design_v1.md` |
 | `knowledge:pi-harness` | pi harness 数据流/工作流刻画(mermaid):架构、agent loop、S1/S2 评测链路、兼容坑 | `docs/knowledge/pi_harness.md` |
+| `knowledge:configurable-runtime` | 当前 S2.8 Python API、YAML/.env、managed perception 与轨迹格式 | `docs/agent/configurable_runtime.md` |
+| `knowledge:s28-config` | `s2_8.yaml` 逐字段说明与 DeepSeek/OpenRouter 配置配方 | `configs/agent/README.md` |
 
 ## ADRs
 
@@ -74,6 +76,7 @@ Reference material loaded on demand.
 |----|----------|------|
 | `adr:tool-augmented-arch` | Agent 系统架构：工具增强 + 证据显式化 | `docs/adr/2026-07-31_tool_augmented_agent_architecture.md` |
 | `adr:s26-64k-commit` | S2.6 使用 64k 对齐窗口与 committed-answer 恢复 | `docs/adr/2026-08-09_s26_64k_context_and_committed_answer.md` |
+| `adr:configurable-s28-runtime` | YAML/.env 自包含 S2.8 runtime + 可进化 Skill + 原生轨迹 | `docs/adr/2026-09-05_configurable_s28_runtime.md` |
 
 ## Usage in plans
 

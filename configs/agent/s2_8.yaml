@@ -1,0 +1,51 @@
+# Field reference and DeepSeek/OpenRouter recipes: configs/agent/README.md
+version: 1
+env_file: ../../.env
+
+providers:
+  deepseek:
+    api: openai-completions
+    base_url_env: POLICY_API_BASE_URL
+    api_key_env: POLICY_API_KEY
+
+models:
+  policy:
+    provider: deepseek
+    id: deepseek-v4-flash-vision-exp
+    name: DeepSeek V4 Flash Vision Experimental
+    reasoning: true
+    context_window: 1000000
+    max_tokens: 32768
+  observer:
+    inherit: policy
+
+agent:
+  backend: pi
+  tool_bundle: s2_8_observation
+  seed_skill: ../../skills/s2_8_initial.md
+  timeout_s: 600
+  max_attempts: 3
+  retry_backoff_s: 5
+  workers: 4
+  pi_binary: ../../third_party/pi-runtime/node_modules/.bin/pi
+  tool_python: /opt/conda/bin/python
+  path_prepend:
+    - /opt/conda/envs/4d-agent/bin/
+
+perception:
+  mode: managed
+  endpoint_env: PERCEPTION_URL
+  python: /opt/conda/envs/4d-agent/bin/python
+  script: ../../scripts/perception_service.py
+  model_path: ../../models/grounding-dino-base
+  visible_devices: "7"
+  eager: true
+  startup_timeout_s: 180
+
+dataset:
+  adapter: vistr
+  root: ../../data/benchmarks/ViSTR-Bench-Public
+  split_config: ../split.json
+
+artifacts:
+  trajectory_root: ../../outputs/trajectories

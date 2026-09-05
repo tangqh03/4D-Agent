@@ -9,7 +9,11 @@
 import assert from "node:assert/strict";
 import { test, loadExtension, createMockAPI, installFetch, testVideo, testImage, countImages, textBlocks } from "./harness.mjs";
 
-async function makeTools(routes) {
+async function makeTools(routes, observerBaseUrl = "http://observer.test") {
+	process.env.VISTR_OBSERVER_BASE_URL = observerBaseUrl;
+	process.env.VISTR_OBSERVER_API_KEY = "test-key";
+	process.env.VISTR_OBSERVER_MODEL = "test-vlm";
+	process.env.VISTR_OBSERVER_HEADERS_JSON = '{"x-observer-test":"configured"}';
 	const mock = createMockAPI();
 	const stub = installFetch(routes);
 	(await loadExtension("/workspace/Spatial-Agent/4D-Agent/agent/pi_ext/vistr_video_tools.ts")).default(mock.api);
@@ -25,6 +29,8 @@ async function makeTools(routes) {
 // ── index_video ──────────────────────────────────────────────────────
 test("index_video: default 8-frame timeline, times within [0, dur-0.1]", async () => {
 	const { tools, stub } = await makeTools({ caption: () => "t=0.00s: nothing\n" });
+	assert.equal(process.env.VISTR_OBSERVER_API_KEY, undefined,
+		"observer key must be removed before model-callable tools execute");
 	const r = await tools.index_video({ path: testVideo() });
 	const times = r.details.times;
 	assert.equal(times.length, 8);
@@ -37,7 +43,12 @@ test("index_video: default 8-frame timeline, times within [0, dur-0.1]", async (
 	// 1000 used to end inside the thinking block, returning content=null)
 	const cap = stub.calls.find((c) => c.url.includes("/chat/completions"));
 	assert.ok(cap, "caption VLM call must happen");
+	assert.ok(cap.url.startsWith("http://observer.test/"));
+	assert.equal(cap.headers.Authorization, "Bearer test-key");
+	assert.equal(cap.headers["x-observer-test"], "configured");
 	assert.equal(cap.body.max_tokens, 1500);
+	assert.equal(cap.body.thinking, undefined,
+		"non-DeepSeek observers must not receive DeepSeek-specific parameters");
 	const contentArr = cap.body.messages[0].content;
 	assert.ok(contentArr.some((b) => b.type === "image_url"), "caption call must embed frames");
 });
@@ -131,7 +142,7 @@ test("read_crop: inverted bbox -> friendly error", async () => {
 	const { tools } = await makeTools({});
 	const r = await tools.read_crop({ path: testVideo(), time_s: 0.5, bbox: [600, 600, 200, 200] });
 	assert.equal(countImages(r.content), 0);
-	assert.ok(textBlocks(r.content).includes("too small or inverted"));
+	assert.ok(textBlocks(r.content).includes("too small after mapping"));
 });
 
 test("read_crop: tiny bbox -> friendly error", async () => {
@@ -152,7 +163,7 @@ test("read_crop: malformed bbox -> friendly error", async () => {
 test("read_crop: video without time_s -> friendly error", async () => {
 	const { tools } = await makeTools({});
 	const r = await tools.read_crop({ path: testVideo(), bbox: [100, 100, 500, 500] });
-	assert.ok(textBlocks(r.content).includes("time_s is required for video paths"));
+	assert.ok(textBlocks(r.content).includes("provide time_s"));
 });
 
 test("read_crop: image path works without time_s", async () => {
@@ -185,7 +196,7 @@ test("semantic_crop: single candidate -> no selection subcall, receipt + crop", 
 	assert.equal(countImages(r.content), 2); // receipt + crop
 	assert.equal(r.details.selection_mode, "single");
 	assert.equal(r.details.grounding_bbox.join(","), "100,50,200,150");
-	assert.deepEqual(r.details.crop_bbox, [85, 35, 215, 165]); // 15% margin
+	assert.deepEqual(r.details.crop_bbox, [40, 0, 260, 220]); // S2.8 context ROI
 	assert.equal(r.details.frame_size.join(","), "320,240");
 	// no candidate-selection chat call
 	assert.ok(!stub.calls.some((c) => c.url.includes("/chat/completions")),
@@ -223,7 +234,7 @@ test("semantic_crop: video without time_s -> friendly error", async () => {
 	const { tools } = await makeTools({ ground: () => SINGLE_CAND });
 	const r = await tools.semantic_crop({ path: testVideo(), target: "the ball" });
 	assert.equal(countImages(r.content), 0);
-	assert.ok(textBlocks(r.content).includes("time_s is required for video paths"));
+	assert.ok(textBlocks(r.content).includes("provide either time_s"));
 });
 
 test("semantic_crop: video + time_s works end-to-end", async () => {
@@ -281,6 +292,32 @@ test("semantic_crop: selection subcall gets enough tokens for a thinking model (
 	await tools.semantic_crop({ path: testImage(), target: "the ball" });
 	const sel = stub.calls.find((c) => c.url.includes("/chat/completions"));
 	assert.ok(sel.body.max_tokens >= 128, `max_tokens=${sel.body.max_tokens} starves the thinking model`);
+});
+
+test("DeepSeek observer subcalls explicitly disable thinking", async () => {
+	const { tools, stub } = await makeTools({
+		caption: () => "t=0.00s: nothing\n",
+		ground: () => TWO_CAND,
+		select: () => "2",
+	}, "https://api.deepseek.com");
+	await tools.index_video({ path: testVideo() });
+	await tools.semantic_crop({ path: testImage(), target: "the ball" });
+	const calls = stub.calls.filter((c) => c.url.includes("/chat/completions"));
+	assert.equal(calls.length, 2);
+	for (const call of calls) {
+		assert.deepEqual(call.body.thinking, { type: "disabled" });
+	}
+});
+
+test("OpenRouter observer subcalls keep their existing request shape", async () => {
+	const { tools, stub } = await makeTools({
+		caption: () => "t=0.00s: nothing\n",
+	}, "https://openrouter.ai/api/v1");
+	await tools.index_video({ path: testVideo() });
+	const call = stub.calls.find((c) => c.url.includes("/chat/completions"));
+	assert.ok(call.url.startsWith("https://openrouter.ai/api/v1/"));
+	assert.equal(call.body.thinking, undefined,
+		"OpenRouter must not receive the DeepSeek-specific thinking field");
 });
 
 test("semantic_crop: selection content null (thinking-only reply) -> friendly error, no crash, no silent pick", async () => {
