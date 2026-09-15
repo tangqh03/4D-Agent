@@ -22,6 +22,9 @@ from agent.skillopt.integration import (
     ViSTRSkillOptAdapter,
     ViSTRSkillOptDataLoader,
     _configure_skillopt_models,
+    _existing_native_run_id,
+    _trajectory_context,
+    _trajectory_run_id,
 )
 from skillopt.config import flatten_config, load_config
 from skillopt.engine.trainer import ReflACTTrainer
@@ -151,8 +154,9 @@ class AdapterTests(unittest.TestCase):
         self.fx.close()
 
     def test_rollout_projects_native_trajectory_for_skillopt(self) -> None:
-        trajectory = self.fx.root / "trajectory"
-        trajectory.mkdir()
+        item_id = self.loader.train_items[0]["id"]
+        trajectory = self.fx.root / "native" / item_id
+        trajectory.mkdir(parents=True)
         conversation_path = trajectory / "conversation.json"
         conversation_path.write_text(json.dumps([
             {"type": "tool_call", "cmd": "read_multiframe({})", "obs": "frames"},
@@ -167,13 +171,14 @@ class AdapterTests(unittest.TestCase):
             failure_only=False,
             minibatch_size=8,
             edit_budget=4,
+            out_root=self.fx.root,
         )
         out_dir = self.fx.root / "rollout"
         results = adapter.rollout([self.loader.train_items[0]], "# Candidate", str(out_dir))
 
         self.assertEqual(results[0]["hard"], 1.0)
         self.assertEqual(runner.calls[0][1], "# Candidate")
-        self.assertTrue(runner.calls[0][2].startswith("skillopt-"))
+        self.assertEqual(runner.calls[0][2], "unknown__rollout")
         projected = json.loads(
             (out_dir / "predictions" / results[0]["id"] / "conversation.json").read_text()
         )
@@ -182,6 +187,43 @@ class AdapterTests(unittest.TestCase):
             (out_dir / "predictions" / results[0]["id"] / "source_trajectory.json").read_text()
         )
         self.assertEqual(source["trajectory_dir"], str(trajectory))
+        self.assertEqual(source["run_context"]["split"], "unknown")
+        self.assertEqual(
+            source["experiment_trajectory_dir"],
+            str(self.fx.root / "trajectories" / "unknown__rollout" / results[0]["id"]),
+        )
+        self.assertTrue((self.fx.root / "trajectory_index.json").is_file())
+        self.assertTrue((self.fx.root / "trajectories" / "unknown__rollout").is_symlink())
+
+    def test_trajectory_name_records_split_epoch_step_and_skill_origin(self) -> None:
+        out_root = self.fx.root / "experiment"
+        out_root.mkdir()
+        (out_root / "runtime_state.json").write_text(json.dumps({
+            "best_origin": "step_0002",
+            "current_origin": "slow_update_epoch_04",
+        }), encoding="utf-8")
+
+        train = _trajectory_context(
+            out_root, out_root / "steps" / "step_0003" / "rollout", 2
+        )
+        self.assertEqual(
+            _trajectory_run_id(train),
+            "train__epoch-02__step-0003__fast-rollout",
+        )
+        test = _trajectory_context(out_root, out_root / "test_eval", 2)
+        self.assertEqual(
+            _trajectory_run_id(test),
+            "test__best-skill-test__origin-step-0002",
+        )
+
+    def test_existing_rollout_reuses_legacy_native_run_id(self) -> None:
+        out_dir = self.fx.root / "test_eval"
+        source = out_dir / "predictions" / "1" / "source_trajectory.json"
+        source.parent.mkdir(parents=True)
+        source.write_text(json.dumps({
+            "trajectory_dir": str(self.fx.root / "legacy" / "skillopt-deadbeef" / "1")
+        }), encoding="utf-8")
+        self.assertEqual(_existing_native_run_id(out_dir), "skillopt-deadbeef")
 
 
 class ConfigTests(unittest.TestCase):

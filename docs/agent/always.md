@@ -1,7 +1,7 @@
 ---
 status: active
 scope: general
-last_verified: 2026-07-31
+last_verified: 2026-09-15
 owner: gaozhe
 ---
 
@@ -35,6 +35,7 @@ These rules apply to every session, every task, every agent.
 - Always add `-u` flag when running Python scripts in background (`nohup python -u ...`).
 - Print timestamps at key pipeline stages for profiling.
 - Visualize intermediate outputs where possible (evidence maps, tracked targets, dashboards).
+- Keep complete trajectories discoverable from each experiment result directory; label rollout groups with split and available epoch/step/stage context.
 - Video encoding: ffmpeg libx264 only; never OpenCV `mp4v` (produces garbled video on this system).
 - After finishing work: update `active.md` with new state.
 - Every experiment produces a run log in `docs/working_logs/runs/`.

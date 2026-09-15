@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -33,6 +35,215 @@ def _history_length(path: Path) -> int:
     except (OSError, json.JSONDecodeError):
         return 0
     return len(value) if isinstance(value, list) else 0
+
+
+def _runtime_origins(out_root: Path) -> dict[str, Any]:
+    path = out_root / "runtime_state.json"
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _trajectory_context(
+    out_root: Path, out_dir: Path, steps_per_epoch: int,
+) -> dict[str, Any]:
+    """Describe one SkillOpt rollout using its trainer-owned output path."""
+    relative = out_dir.resolve().relative_to(out_root.resolve())
+    parts = relative.parts
+    stage = "rollout" if relative == Path(".") else relative.as_posix().replace("/", "-")
+    context: dict[str, Any] = {
+        "split": "unknown",
+        "stage": stage,
+        "epoch": None,
+        "step": None,
+        "batch": None,
+        "skill_origin": None,
+    }
+    origins = _runtime_origins(out_root)
+
+    if not parts:
+        return context
+    if parts[0] == "selection_eval_baseline":
+        context.update(split="val", stage="baseline-selection", skill_origin="initial_skill")
+    elif parts[0] == "final_selection_eval":
+        context.update(
+            split="val", stage="final-selection",
+            skill_origin=origins.get("current_origin"),
+        )
+    elif parts[0] == "test_eval_baseline":
+        context.update(split="test", stage="baseline-test", skill_origin="initial_skill")
+    elif parts[0] == "test_eval":
+        context.update(
+            split="test", stage="best-skill-test",
+            skill_origin=origins.get("best_origin"),
+        )
+    elif parts[0] == "test_eval_final":
+        context.update(
+            split="test", stage="final-skill-test",
+            skill_origin=origins.get("current_origin"),
+        )
+    elif parts[0] == "steps" and len(parts) >= 3:
+        step = int(parts[1].removeprefix("step_"))
+        epoch = (step - 1) // max(steps_per_epoch, 1) + 1
+        stage = "candidate-selection" if parts[-1] == "selection_eval" else "fast-rollout"
+        context.update(
+            split="val" if stage == "candidate-selection" else "train",
+            stage=stage,
+            epoch=epoch,
+            step=step,
+            batch=(
+                int(parts[2].removeprefix("batch_"))
+                if parts[2].startswith("batch_") else None
+            ),
+            skill_origin=f"step_{step:04d}" if stage == "candidate-selection" else None,
+        )
+    elif parts[0] in {"slow_update", "meta_skill"} and len(parts) >= 3:
+        epoch = int(parts[1].removeprefix("epoch_"))
+        branch = parts[2]
+        suffix = "-".join(value.replace("_", "-") for value in parts[3:])
+        stage = f"{parts[0].replace('_', '-')}-{branch.replace('_', '-')}"
+        if suffix:
+            stage += f"-{suffix}"
+        split_name = "val" if branch == "selection_eval" else "train"
+        context.update(split=split_name, stage=stage, epoch=epoch)
+    return context
+
+
+def _trajectory_run_id(context: dict[str, Any]) -> str:
+    parts = [str(context["split"])]
+    if context.get("epoch") is not None:
+        parts.append(f"epoch-{int(context['epoch']):02d}")
+    if context.get("step") is not None:
+        parts.append(f"step-{int(context['step']):04d}")
+    if context.get("batch") is not None:
+        parts.append(f"batch-{int(context['batch']):02d}")
+    parts.append(str(context["stage"]))
+    if context.get("skill_origin"):
+        origin = str(context["skill_origin"]).replace("_", "-")
+        parts.append(f"origin-{origin}")
+    return "__".join(parts)
+
+
+def _existing_trajectory_root(out_root: Path) -> Path | None:
+    """Recover the native root used by an older/partial run for safe resume."""
+    source_path = next(out_root.glob("**/predictions/*/source_trajectory.json"), None)
+    if source_path is None:
+        return None
+    try:
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+        trajectory_dir = Path(str(source["trajectory_dir"])).resolve()
+    except (KeyError, OSError, json.JSONDecodeError):
+        return None
+    return trajectory_dir.parents[1]
+
+
+def _existing_native_run_id(out_dir: Path) -> str | None:
+    source_path = next(out_dir.glob("predictions/*/source_trajectory.json"), None)
+    if source_path is None:
+        return None
+    try:
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+        return Path(str(source["trajectory_dir"])).resolve().parent.name
+    except (KeyError, OSError, json.JSONDecodeError):
+        return None
+
+
+def _record_trajectory_group(
+    *,
+    out_root: Path,
+    out_dir: Path,
+    run_id: str,
+    context: dict[str, Any],
+    native_group: Path,
+    item_ids: list[str],
+) -> Path:
+    """Expose a native group inside the experiment and update its index."""
+    browse_root = out_root / "trajectories"
+    browse_root.mkdir(parents=True, exist_ok=True)
+    browse_group = browse_root / run_id
+    if browse_group.resolve() != native_group.resolve():
+        if browse_group.is_symlink():
+            if browse_group.resolve() != native_group.resolve():
+                raise RuntimeError(f"Trajectory link targets a different group: {browse_group}")
+        elif browse_group.exists():
+            raise RuntimeError(f"Trajectory browse path already exists: {browse_group}")
+        else:
+            relative_target = os.path.relpath(native_group, browse_group.parent)
+            browse_group.symlink_to(relative_target, target_is_directory=True)
+
+    index_path = out_root / "trajectory_index.json"
+    index: dict[str, Any] = {"version": 1, "experiment_dir": str(out_root), "groups": {}}
+    if index_path.is_file():
+        current = json.loads(index_path.read_text(encoding="utf-8"))
+        if isinstance(current, dict) and isinstance(current.get("groups"), dict):
+            index = current
+    index["groups"][run_id] = {
+        **context,
+        "rollout_output_dir": str(out_dir),
+        "trajectory_dir": str(browse_group),
+        "native_trajectory_dir": str(native_group),
+        "item_count": len(item_ids),
+        "item_ids": item_ids,
+    }
+    index_path.write_text(
+        json.dumps(index, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    return browse_group
+
+
+def index_existing_trajectories(out_root: Path, *, steps_per_epoch: int) -> dict[str, Any]:
+    """Backfill experiment-local links and metadata for an existing ViSTR run."""
+    out_root = out_root.resolve()
+    grouped: dict[Path, list[Path]] = {}
+    for source_path in out_root.glob("**/predictions/*/source_trajectory.json"):
+        grouped.setdefault(source_path.parents[2], []).append(source_path)
+
+    for out_dir, source_paths in sorted(grouped.items(), key=lambda item: str(item[0])):
+        context = _trajectory_context(out_root, out_dir, steps_per_epoch)
+        run_id = _trajectory_run_id(context)
+        sources = [json.loads(path.read_text(encoding="utf-8")) for path in source_paths]
+        native_groups = {
+            Path(str(source["trajectory_dir"])).resolve().parent for source in sources
+        }
+        if len(native_groups) != 1:
+            raise RuntimeError(f"Mixed native trajectory groups in {out_dir}")
+        native_group = native_groups.pop()
+        item_ids = sorted((path.parent.name for path in source_paths), key=lambda x: (len(x), x))
+        browse_group = _record_trajectory_group(
+            out_root=out_root,
+            out_dir=out_dir,
+            run_id=run_id,
+            context=context,
+            native_group=native_group,
+            item_ids=item_ids,
+        )
+        for path, source in zip(source_paths, sources):
+            source.update({
+                "experiment_trajectory_dir": str(browse_group / path.parent.name),
+                "run_context": context,
+            })
+            path.write_text(
+                json.dumps(source, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            )
+        results_path = out_dir / "results.jsonl"
+        if results_path.is_file():
+            rows = [
+                json.loads(line) for line in results_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            for row in rows:
+                row["experiment_trajectory_dir"] = str(browse_group / str(row["id"]))
+                row["run_context"] = context
+            results_path.write_text(
+                "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+    index_path = out_root / "trajectory_index.json"
+    return json.loads(index_path.read_text(encoding="utf-8"))
 
 
 def _train_preserving_completed_summary(cfg: dict, adapter: EnvAdapter) -> dict:
@@ -181,6 +392,8 @@ class ViSTRSkillOptAdapter(EnvAdapter):
         failure_only: bool,
         minibatch_size: int,
         edit_budget: int,
+        out_root: Path | None = None,
+        steps_per_epoch: int = 1,
     ) -> None:
         self.runner = runner
         self.dataloader = dataloader
@@ -189,10 +402,16 @@ class ViSTRSkillOptAdapter(EnvAdapter):
         self.failure_only = failure_only
         self.minibatch_size = minibatch_size
         self.edit_budget = edit_budget
+        self.out_root = out_root.resolve() if out_root is not None else None
+        self.steps_per_epoch = steps_per_epoch
 
     def setup(self, cfg: dict) -> None:
         super().setup(cfg)
         self.dataloader.setup(cfg)
+        train_size = int(cfg.get("train_size", 0) or len(self.dataloader.train_items))
+        self.steps_per_epoch = math.ceil(
+            train_size / (int(cfg["batch_size"]) * int(cfg["accumulation"]))
+        )
 
     def get_dataloader(self) -> ViSTRSkillOptDataLoader:
         return self.dataloader
@@ -213,13 +432,30 @@ class ViSTRSkillOptAdapter(EnvAdapter):
     def rollout(
         self, env_manager: list[dict], skill_content: str, out_dir: str, **kwargs: Any
     ) -> list[dict]:
+        rollout_dir = Path(out_dir).resolve()
+        out_root = self.out_root or rollout_dir
+        context = _trajectory_context(out_root, rollout_dir, self.steps_per_epoch)
+        browse_run_id = _trajectory_run_id(context)
+        native_run_id = _existing_native_run_id(rollout_dir) or browse_run_id
         items = [self._agent_item(row) for row in env_manager]
-        digest = hashlib.sha256(str(Path(out_dir).resolve()).encode()).hexdigest()[:16]
         records = self.runner.rollout(
-            items, skill_content=skill_content, run_id=f"skillopt-{digest}"
+            items, skill_content=skill_content, run_id=native_run_id
         )
-        predictions = Path(out_dir) / "predictions"
+        predictions = rollout_dir / "predictions"
         predictions.mkdir(parents=True, exist_ok=True)
+        native_groups = {
+            Path(str(record.trajectory_dir)).resolve().parent for record in records
+        }
+        if len(native_groups) != 1:
+            raise RuntimeError(f"Mixed native trajectory groups in {rollout_dir}")
+        browse_group = _record_trajectory_group(
+            out_root=out_root,
+            out_dir=rollout_dir,
+            run_id=browse_run_id,
+            context=context,
+            native_group=native_groups.pop(),
+            item_ids=[item.id for item in items],
+        )
         results: list[dict] = []
         for item, record in zip(items, records):
             item_dir = predictions / item.id
@@ -236,6 +472,8 @@ class ViSTRSkillOptAdapter(EnvAdapter):
                     "conversation_path": record.conversation_path,
                     "session_jsonl": record.session_jsonl,
                     "session_html": record.session_html,
+                    "experiment_trajectory_dir": str(browse_group / item.id),
+                    "run_context": context,
                 }, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
@@ -251,6 +489,8 @@ class ViSTRSkillOptAdapter(EnvAdapter):
                 "predicted_answer": record.predicted_answer or "",
                 "target_user_prompt": target_prompt,
                 "trajectory_dir": record.trajectory_dir,
+                "experiment_trajectory_dir": str(browse_group / item.id),
+                "run_context": context,
                 "conversation_path": record.conversation_path,
                 "session_html": record.session_html,
                 "agent_ok": record.agent_ok,
@@ -260,7 +500,7 @@ class ViSTRSkillOptAdapter(EnvAdapter):
                     if "timeout" in str(attempt.process_error or "").lower()
                 ),
             })
-        (Path(out_dir) / "results.jsonl").write_text(
+        (rollout_dir / "results.jsonl").write_text(
             "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in results),
             encoding="utf-8",
         )
@@ -419,6 +659,12 @@ def run_training(config_path: Path, *, overrides: list[str], smoke: bool) -> dic
         )
         cfg["data_path"] = str(agent_config.dataset.root / "data.json")
         cfg["workers"] = agent_config.agent.workers
+        out_root = Path(cfg["out_root"])
+        trajectory_root = _existing_trajectory_root(out_root) or out_root / "trajectories"
+        agent_config = replace(
+            agent_config,
+            artifacts=replace(agent_config.artifacts, trajectory_root=trajectory_root),
+        )
         dataloader = ViSTRSkillOptDataLoader(
             dataset_root=agent_config.dataset.root,
             id_file=id_file,
@@ -439,6 +685,8 @@ def run_training(config_path: Path, *, overrides: list[str], smoke: bool) -> dic
                 failure_only=bool(cfg["failure_only"]),
                 minibatch_size=int(cfg["minibatch_size"]),
                 edit_budget=int(cfg["edit_budget"]),
+                out_root=out_root,
+                steps_per_epoch=int(cfg.get("steps_per_epoch", 1)),
             )
             return _train_preserving_completed_summary(cfg, adapter)
     finally:
