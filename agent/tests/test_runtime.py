@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from agent.datasets import ViSTRAdapter
 from agent.runtime import AgentConfig, AgentItem, AgentRunner
-from agent.runtime.artifacts import export_and_materialize
+from agent.runtime.artifacts import enable_custom_tool_images, export_and_materialize
 from agent.runtime.pi_events import extract_answer
 from agent.runtime.runner import PROMPT, TOOLS_NOTE
 from agent.runtime.tool_bundles import get_tool_bundle
@@ -328,6 +328,30 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(record.artifact_errors)
         self.assertTrue(Path(record.conversation_path).is_file())
         self.assertEqual(record.session_jsonl, [str(session)])
+
+    def test_pi_html_custom_tool_images_are_enabled_idempotently(self):
+        root = Path(__file__).resolve().parents[2]
+        template = (root / "third_party" / "pi-runtime" / "node_modules"
+                    / "@earendil-works" / "pi-coding-agent" / "dist" / "core"
+                    / "export-html" / "template.js")
+        session = self.fx.root / "session.jsonl"
+        session.write_text(json.dumps({
+            "type": "message",
+            "message": {
+                "role": "toolResult",
+                "toolName": "read_multiframe",
+                "content": [{"type": "image", "mimeType": "image/jpeg", "data": "aW1n"}],
+            },
+        }) + "\n", encoding="utf-8")
+        html = self.fx.root / "session.html"
+        html.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
+
+        self.assertEqual(enable_custom_tool_images(session, html), 1)
+        patched = html.read_text(encoding="utf-8")
+        self.assertIn("render image blocks returned by custom tools", patched)
+        self.assertEqual(patched.count("html += renderResultImages();"), 2)
+        self.assertEqual(enable_custom_tool_images(session, html), 1)
+        self.assertEqual(html.read_text(encoding="utf-8"), patched)
 
 
 class FakeProcess:

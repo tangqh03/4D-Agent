@@ -7,7 +7,7 @@ code_paths:
   - agent/pi_ext/vistr_video_tools.ts
 entrypoints:
   - "AgentRunner.from_yaml(...).rollout(...)"
-last_verified: 2026-09-05
+last_verified: 2026-09-15
 owner: gaozhe
 ---
 
@@ -36,7 +36,7 @@ flowchart TD
     W --> PI[Pi + fixed S2.8 Tool Bundle]
     T --> PI
     PI --> J[Attempt session JSONL]
-    J --> H[Pi HTML export]
+    J --> H[Pi HTML export + custom-tool image rendering]
     J --> X[Decode image blocks]
     J --> V[Compact conversation]
     H & X & V --> O[RolloutRecord + results.jsonl]
@@ -53,7 +53,8 @@ with AgentRunner(config):
         for configured attempt:
             run Pi with fixed tools, session directory, Skill, and configured thinking level
             parse answer and tool trace
-            export every session to HTML
+            export every session to HTML and enable rendering for image blocks
+            returned by custom tools
             decode session images and write conversation.json
             stop retrying after a successful Pi exit
         score final answer and append RolloutRecord
@@ -66,7 +67,7 @@ with AgentRunner(config):
 |--------|------|------|
 | `AgentConfig.from_yaml` | `agent/runtime/config.py` | Strict YAML/dotenv parsing and preflight validation |
 | `AgentRunner` | `agent/runtime/runner.py` | Provider setup, service lifetime, concurrency, retries, scoring, resume |
-| `export_and_materialize` | `agent/runtime/artifacts.py` | Pi HTML export, image decoding, conversation creation |
+| `export_and_materialize` / `enable_custom_tool_images` | `agent/runtime/artifacts.py` | Pi HTML export, custom-tool image rendering, image decoding, conversation creation |
 | `parse_pi_json` | `agent/runtime/pi_events.py` | Pi event stream and tool trace parsing |
 | `get_tool_bundle` | `agent/runtime/tool_bundles.py` | Closed S2.8 tool allowlist and extension mapping |
 | `ViSTRAdapter` | `agent/datasets/vistr.py` | Benchmark records to Agent Items |
@@ -88,4 +89,8 @@ trajectory_root/<run_id>/
     └── images/
 ```
 
-The Pi JSONL and HTML retain inline image data. `images/` contains decoded copies, and `conversation.json` refers to them with attempt-relative paths.
+The Pi JSONL and self-contained HTML retain inline image data. The runtime adds
+the missing renderer call for images returned by custom tools such as
+`read_multiframe` and `semantic_crop`; built-in `read` rendering remains
+unchanged. `images/` contains decoded copies, and `conversation.json` refers to
+them with attempt-relative paths.

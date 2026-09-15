@@ -13,6 +13,13 @@ from .contracts import AgentItem, AttemptRecord
 
 
 TEXT_LIMIT = 4000
+_CUSTOM_IMAGE_MARKER = "// ViSTR: render image blocks returned by custom tools."
+_TOOL_RENDER_RETURN = """        html += '</div>';
+        return html;
+      }
+
+      /**
+       * Download the session data"""
 
 
 def _safe(value: str) -> str:
@@ -24,6 +31,47 @@ def _trim(text: str) -> str:
     if len(text) <= TEXT_LIMIT:
         return text
     return text[:TEXT_LIMIT] + f"\n...[truncated, {len(text)} chars total]"
+
+
+def enable_custom_tool_images(
+    session: Path, html: Path, output: Path | None = None,
+) -> int:
+    """Make custom-tool image results visible in Pi's self-contained HTML."""
+    image_count = 0
+    for line in session.read_text(encoding="utf-8").splitlines():
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        message = entry.get("message") if entry.get("type") == "message" else None
+        if not isinstance(message, dict) or message.get("role") != "toolResult":
+            continue
+        if message.get("toolName") == "read":
+            continue
+        image_count += sum(
+            1 for block in (message.get("content") or [])
+            if isinstance(block, dict) and block.get("type") == "image" and block.get("data")
+        )
+    if image_count == 0:
+        return 0
+
+    target = output or html
+    source = html.read_text(encoding="utf-8")
+    if _CUSTOM_IMAGE_MARKER in source:
+        if target != html:
+            target.write_text(source, encoding="utf-8")
+        return image_count
+    if _TOOL_RENDER_RETURN not in source:
+        raise ValueError("Pi HTML template has no recognized tool-render return block")
+    patch = """        // ViSTR: render image blocks returned by custom tools.
+        if (name !== 'read') {
+          html += renderResultImages();
+        }
+
+"""
+    target.write_text(source.replace(_TOOL_RENDER_RETURN, patch + _TOOL_RENDER_RETURN, 1),
+                      encoding="utf-8")
+    return image_count
 
 
 def export_and_materialize(
@@ -45,6 +93,12 @@ def export_and_materialize(
                               capture_output=True, text=True, env=env, timeout=120)
         if proc.returncode == 0 and html.is_file():
             record.session_html.append(str(html))
+            try:
+                enable_custom_tool_images(session, html)
+            except (OSError, ValueError) as exc:
+                record.artifact_errors.append(
+                    f"Custom-tool image rendering patch failed for {html.name}: {exc}"
+                )
         else:
             record.artifact_errors.append(
                 f"HTML export failed for {session.name}: {(proc.stderr or proc.stdout)[:300]}")
