@@ -1,9 +1,19 @@
 ---
 status: active
-last_updated: 2026-09-05
+last_updated: 2026-09-15
 ---
 
 # ViSTR-Agent — Active Work State
+
+## Update: Experiment-local SkillOpt trajectory audit (2026-09-15)
+
+- Dev now stores new ViSTR SkillOpt trajectories inside each experiment and
+  labels rollout groups with split plus available epoch/step/stage/Skill origin.
+- Legacy run `qwen35-gemini38-vistr-seed43-run-2026-09-14_151501` was backfilled
+  without copying or moving native artifacts: 19 relative links index 520
+  item-rollouts. All 526 Pi sessions were re-exported to HTML; 525 pages expose
+  7,796 custom-tool image blocks, while one session has no such image.
+- Details: `runs/2026-09-15_151501_trajectory_discoverability_backfill.md`.
 
 ## Current Focus: Fengyuan GPT-5.5 clean-machine handover (2026-09-05)
 
