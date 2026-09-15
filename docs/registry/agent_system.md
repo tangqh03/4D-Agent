@@ -81,6 +81,7 @@ Reference material loaded on demand.
 | `adr:configurable-s28-runtime` | YAML/.env 自包含 S2.8 runtime + 可进化 Skill + 原生轨迹 | `docs/adr/2026-09-05_configurable_s28_runtime.md` |
 | `adr:native-skillopt-vistr` | 固定上游 SkillOpt commit，复用 DocVQA 训练配方更新 S2.8 Skill | `docs/adr/2026-09-05_native_skillopt_vistr_training.md` |
 | `adr:skillopt-cross-benchmark-pilot` | 100-item ViSTR/DocVQA 同预算单种子对比与 Effective Update 口径 | `docs/adr/2026-09-05_skillopt_cross_benchmark_pilot.md` |
+| `adr:experiment-local-skillopt-trajectories` | ViSTR SkillOpt 完整轨迹随实验存放并按 split/epoch/step/stage 命名；旧实验用链接兼容 | `docs/adr/2026-09-15_experiment_local_skillopt_trajectories.md` |
 
 ## Usage in plans
 
